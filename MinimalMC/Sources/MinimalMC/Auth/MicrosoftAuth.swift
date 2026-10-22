@@ -17,6 +17,64 @@ public struct MinecraftProfile: Codable {
     }
 }
 
+
+public struct DeviceCodeInfo: Codable {
+    public let userCode: String
+    public let deviceCode: String
+    public let verificationUri: String
+    public let expiresIn: Int
+    public let interval: Int?
+    public let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case userCode = "user_code"
+        case deviceCode = "device_code"
+        case verificationUri = "verification_uri"
+        case expiresIn = "expires_in"
+        case interval
+        case message
+    }
+}
+
+public struct TokenResponse: Codable {
+    public let tokenType: String
+    public let scope: String
+    public let expiresIn: Int
+    public let accessToken: String
+    public let refreshToken: String?
+    public let idToken: String?
+
+    enum CodingKeys: String, CodingKey {
+        case tokenType = "token_type"
+        case scope
+        case expiresIn = "expires_in"
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case idToken = "id_token"
+    }
+}
+
+public struct TokenErrorResponse: Codable {
+    public let error: String
+    public let errorDescription: String?
+
+    enum CodingKeys: String, CodingKey {
+        case error
+        case errorDescription = "error_description"
+    }
+}
+
+public enum DeviceAuthError: Error {
+    case invalidResponse
+    case networkError(Error)
+    case authorizationPending
+    case authorizationDeclined
+    case badVerificationCode
+    case expiredToken
+    case noRefreshToken
+    case other(String)
+}
+
 public class MicrosoftAuth {
     public static let shared = MicrosoftAuth()
 
@@ -26,6 +84,126 @@ public class MicrosoftAuth {
     // but throw a NotImplemented error or return a mock for testing purposes.
 
     private init() {}
+
+    // MARK: - Device Code Flow
+
+    public func requestDeviceCode(clientId: String) async throws -> DeviceCodeInfo {
+        let urlString = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode"
+        guard let url = URL(string: urlString) else { throw DeviceAuthError.invalidResponse }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        let bodyString = "client_id=\(clientId)&scope=XboxLive.signin%20offline_access"
+        request.httpBody = bodyString.data(using: .utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw DeviceAuthError.invalidResponse
+        }
+
+        let info = try JSONDecoder().decode(DeviceCodeInfo.self, from: data)
+        return info
+    }
+
+    public func pollForToken(clientId: String, deviceCode: String, interval: Int) async throws -> TokenResponse {
+        let urlString = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+        guard let url = URL(string: urlString) else { throw DeviceAuthError.invalidResponse }
+
+        let bodyString = "grant_type=urn:ietf:params:oauth:grant-type:device_code&client_id=\(clientId)&device_code=\(deviceCode)"
+
+        while true {
+            try await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            request.httpBody = bodyString.data(using: .utf8)
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw DeviceAuthError.invalidResponse
+            }
+
+            if httpResponse.statusCode == 200 {
+                let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
+                saveTokens(tokenResponse: tokenResponse)
+                return tokenResponse
+            } else {
+                if let errorResponse = try? JSONDecoder().decode(TokenErrorResponse.self, from: data) {
+                    switch errorResponse.error {
+                    case "authorization_pending":
+                        continue
+                    case "authorization_declined":
+                        throw DeviceAuthError.authorizationDeclined
+                    case "bad_verification_code":
+                        throw DeviceAuthError.badVerificationCode
+                    case "expired_token":
+                        throw DeviceAuthError.expiredToken
+                    default:
+                        throw DeviceAuthError.other(errorResponse.error)
+                    }
+                } else {
+                    throw DeviceAuthError.invalidResponse
+                }
+            }
+        }
+    }
+
+    public func refreshToken(clientId: String) async throws -> TokenResponse {
+        guard let refreshToken = KeychainManager.shared.loadToken(for: "microsoft_refresh_token") else {
+            throw DeviceAuthError.noRefreshToken
+        }
+
+        let urlString = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+        guard let url = URL(string: urlString) else { throw DeviceAuthError.invalidResponse }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        let bodyString = "grant_type=refresh_token&client_id=\(clientId)&refresh_token=\(refreshToken)"
+        request.httpBody = bodyString.data(using: .utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw DeviceAuthError.invalidResponse
+        }
+
+        let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
+        saveTokens(tokenResponse: tokenResponse)
+        return tokenResponse
+    }
+
+    public func getValidAccessToken(clientId: String) async throws -> String {
+        if let accessToken = KeychainManager.shared.loadToken(for: "microsoft_access_token"),
+           let expiresAtString = KeychainManager.shared.loadToken(for: "microsoft_token_expires_at"),
+           let expiresAt = TimeInterval(expiresAtString) {
+
+            // If token expires in more than 5 minutes, we can use it
+            if Date().timeIntervalSince1970 + 300 < expiresAt {
+                return accessToken
+            }
+        }
+
+        let response = try await refreshToken(clientId: clientId)
+        return response.accessToken
+    }
+
+    private func saveTokens(tokenResponse: TokenResponse) {
+        _ = KeychainManager.shared.saveToken(tokenResponse.accessToken, for: "microsoft_access_token")
+        if let refreshToken = tokenResponse.refreshToken {
+            _ = KeychainManager.shared.saveToken(refreshToken, for: "microsoft_refresh_token")
+        }
+
+        let expiresAt = Date().timeIntervalSince1970 + TimeInterval(tokenResponse.expiresIn)
+        _ = KeychainManager.shared.saveToken(String(expiresAt), for: "microsoft_token_expires_at")
+    }
+
 
     public enum AuthError: Error {
         case notImplemented
