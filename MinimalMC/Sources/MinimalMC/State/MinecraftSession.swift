@@ -62,13 +62,13 @@ public actor MinecraftSession {
         Task {
             do {
                 let handshake = try HandshakePacket.create(protocolVersion: protocolVersion, serverAddress: serverHost, serverPort: serverPort, nextState: .login)
-                transport.send(packet: handshake)
+                self.sendPacket(handshake)
 
                 currentState = .login
                 updateStatus(.loggingIn)
 
                 let loginStart = try LoginStartPacket.create(username: username, uuid: uuid)
-                transport.send(packet: loginStart)
+                self.sendPacket(loginStart)
             } catch {
                 updateStatus(.failed("Failed to send handshake: \(error.localizedDescription)"))
                 transport.disconnect()
@@ -92,6 +92,7 @@ public actor MinecraftSession {
     }
 
     private func handlePacket(_ packet: Packet) {
+        DiagnosticsLogger.shared.log(id: packet.packetID, size: packet.data.count + 1, direction: "In", state: "\(currentState)")
         do {
             var data = packet.data
 
@@ -144,7 +145,7 @@ public actor MinecraftSession {
                         Task {
                             // Send Encryption Response
                             let response = try EncryptionResponsePacket.create(sharedSecret: encryptedSecret as Data, verifyToken: encryptedVerifyToken as Data)
-                            self.transport.send(packet: response)
+                            self.sendPacket(response)
                             self.transport.enableEncryption(sharedSecret: sharedSecret)
                         }
                     }
@@ -154,7 +155,7 @@ public actor MinecraftSession {
                     currentState = .configuration
                     updateStatus(.configuring)
                     let ack = Packet(packetID: 0x03, data: Data()) // Login Acknowledged
-                    transport.send(packet: ack)
+                    self.sendPacket(ack)
                 case 0x03: // Set Compression
                     let threshold = try VarInt.read(from: &data)
                     transport.setCompressionThreshold(Int(threshold))
@@ -171,21 +172,21 @@ public actor MinecraftSession {
                     transport.disconnect()
                 case 0x02: // Finish Configuration
                     let ack = Packet(packetID: 0x02, data: Data()) // Acknowledge Finish Configuration
-                    transport.send(packet: ack)
+                    self.sendPacket(ack)
                     currentState = .play
                     updateStatus(.online)
                 case 0x03: // Keep Alive
                     var responseData = Data()
                     responseData.append(data)
                     let keepAliveResponse = Packet(packetID: 0x03, data: responseData)
-                    transport.send(packet: keepAliveResponse)
+                    self.sendPacket(keepAliveResponse)
                 case 0x06: // Registry Data
                     break
                 case 0x0E: // Clientbound Known Packs
                     // Send Serverbound Known Packs
                     var responseData = Data()
                     VarInt.write(0, to: &responseData)
-                    transport.send(packet: Packet(packetID: 0x07, data: responseData))
+                    self.sendPacket(Packet(packetID: 0x07, data: responseData))
                 default:
                     break
                 }
@@ -194,7 +195,7 @@ public actor MinecraftSession {
                 case 0x24: // Keep Alive (1.20.4)
                     let keepAliveID = try DataTypes.readLong(from: &data)
                     let response = KeepAlivePacket.create(keepAliveID: keepAliveID)
-                    transport.send(packet: response)
+                    self.sendPacket(response)
                 case 0x3E: // Synchronize Player Position (1.20.4)
                     // Skip x, y, z, yaw, pitch, flags to get teleport ID
                     let _ = try DataTypes.readLong(from: &data) // x
@@ -206,7 +207,7 @@ public actor MinecraftSession {
                     let teleportID = try VarInt.read(from: &data)
 
                     let confirm = TeleportConfirmPacket.create(teleportID: teleportID)
-                    transport.send(packet: confirm)
+                    self.sendPacket(confirm)
                 case 0x1B: // Disconnect (1.20.4)
                     let reason = "Disconnected by server during play"
                     updateStatus(.disconnected(reason))
@@ -221,6 +222,11 @@ public actor MinecraftSession {
         } catch {
             print("Packet handling error: \(error)")
         }
+    }
+
+    private func sendPacket(_ packet: Packet) {
+        DiagnosticsLogger.shared.log(id: packet.packetID, size: packet.data.count + 1, direction: "Out", state: "\(currentState)")
+        transport.send(packet: packet)
     }
 
     private func updateStatus(_ newStatus: SessionStatus) {
