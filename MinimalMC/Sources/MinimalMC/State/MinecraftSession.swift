@@ -164,7 +164,13 @@ public actor MinecraftSession {
             case .configuration:
                 switch packet.packetID {
                 case 0x00: // Clientbound Plugin Message
-                    break
+                    if let channel = try? DataTypes.readString(from: &data), channel == "minecraft:brand" {
+                        var responseData = Data()
+                        try? DataTypes.writeString("minecraft:brand", to: &responseData)
+                        try? DataTypes.writeString("MinimalMC", to: &responseData)
+                        let responsePacket = Packet(packetID: 0x00, data: responseData)
+                        transport.send(packet: responsePacket)
+                    }
                 case 0x01: // Disconnect
                     let reason = "Disconnected by server during configuration"
                     updateStatus(.disconnected(reason))
@@ -179,13 +185,15 @@ public actor MinecraftSession {
                     responseData.append(data)
                     let keepAliveResponse = Packet(packetID: 0x03, data: responseData)
                     transport.send(packet: keepAliveResponse)
-                case 0x06: // Registry Data
-                    break
-                case 0x0E: // Clientbound Known Packs
-                    // Send Serverbound Known Packs
+                case 0x04: // Ping
                     var responseData = Data()
-                    VarInt.write(0, to: &responseData)
-                    transport.send(packet: Packet(packetID: 0x07, data: responseData))
+                    responseData.append(data)
+                    let pongResponse = Packet(packetID: 0x04, data: responseData)
+                    transport.send(packet: pongResponse)
+                case 0x05: // Registry Data
+                    break
+                case 0x07: // Update Tags
+                    break
                 default:
                     break
                 }
