@@ -135,12 +135,10 @@ public actor MinecraftSession {
                         return
                     }
 
-                    // Call MS auth mock
-                    // In a real app we need the accessToken from MicrosoftAuth
-                    // and we generate the server hash using SHA-1
-                    let serverHash = "mocked-hash"
+                    let serverHash = MojangServerHash.generate(serverId: serverId, sharedSecret: sharedSecret, publicKey: publicKeyData)
+                    let profileId = self.uuid?.uuidString.replacingOccurrences(of: "-", with: "") ?? "mocked-uuid"
 
-                    MicrosoftAuth.shared.joinServer(accessToken: "mocked-token", selectedProfile: "mocked-uuid", serverHash: serverHash) { success in
+                    MojangJoin.joinServer(accessToken: "mocked-token", selectedProfile: profileId, serverHash: serverHash) { success in
                         Task {
                             // Send Encryption Response
                             let response = try EncryptionResponsePacket.create(sharedSecret: encryptedSecret as Data, verifyToken: encryptedVerifyToken as Data)
