@@ -74,4 +74,29 @@ final class ProtocolTests: XCTestCase {
 
         XCTAssertEqual(originalData, decrypted)
     }
+
+    func testContinuousEncryptionStream() throws {
+        let secret = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+        let encryptor = PacketEncryption(sharedSecret: secret)
+        let decryptor = PacketEncryption(sharedSecret: secret)
+
+        let chunks = [
+            Data("Chunk 1: First packet".utf8),
+            Data("Chunk 2: Second packet follows".utf8),
+            Data("Chunk 3: Short".utf8),
+            Data(repeating: 0x42, count: 1000)
+        ]
+
+        var decryptedChunks: [Data] = []
+
+        for chunk in chunks {
+            let encrypted = encryptor.encrypt(chunk)
+            let decrypted = decryptor.decrypt(encrypted)
+            decryptedChunks.append(decrypted)
+        }
+
+        for (i, original) in chunks.enumerated() {
+            XCTAssertEqual(original, decryptedChunks[i], "Failed at chunk \(i)")
+        }
+    }
 }
