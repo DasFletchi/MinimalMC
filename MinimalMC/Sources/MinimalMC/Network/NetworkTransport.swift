@@ -51,17 +51,7 @@ public class NetworkTransport {
 
     public func send(packet: Packet) {
         queue.async {
-            var packetData = Data()
-            VarInt.write(packet.packetID, to: &packetData)
-            packetData.append(packet.data)
-
-            if let threshold = self.compressionThreshold {
-                packetData = PacketCompression.compress(packetData, threshold: threshold)
-            }
-
-            var framedData = Data()
-            VarInt.write(Int32(packetData.count), to: &framedData)
-            framedData.append(packetData)
+            var framedData = PacketFraming.encode(packet, compressionThreshold: self.compressionThreshold)
 
             if let encryption = self.encryption {
                 framedData = encryption.encrypt(framedData)
@@ -105,19 +95,11 @@ public class NetworkTransport {
         while true {
             var snapshot = receiveBuffer
             do {
-                if let packet = try PacketFraming.decode(from: &snapshot) {
+                if let packet = try PacketFraming.decode(from: &snapshot, compressionThreshold: compressionThreshold) {
                     receiveBuffer = snapshot
 
-                    var packetData = packet.data
-                    if compressionThreshold != nil {
-                        packetData = try PacketCompression.decompress(from: &packetData)
-                    }
-
-                    let packetID = try VarInt.read(from: &packetData)
-                    let decodedPacket = Packet(packetID: packetID, data: packetData)
-
                     DispatchQueue.main.async {
-                        self.onReceive?(decodedPacket)
+                        self.onReceive?(packet)
                     }
                 } else {
                     break // Need more data
