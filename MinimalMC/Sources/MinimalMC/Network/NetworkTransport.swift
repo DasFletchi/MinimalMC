@@ -49,7 +49,7 @@ public class NetworkTransport {
         receiveBuffer.removeAll()
     }
 
-    public func send(packet: Packet) {
+    public func send(packet: Packet, completion: (() -> Void)? = nil) {
         queue.async {
             var packetData = Data()
             VarInt.write(packet.packetID, to: &packetData)
@@ -70,6 +70,8 @@ public class NetworkTransport {
             self.connection?.send(content: framedData, completion: .contentProcessed({ error in
                 if let error = error {
                     print("Send error: \(error)")
+                } else {
+                    completion?()
                 }
             }))
         }

@@ -26,7 +26,7 @@ struct ContentView: View {
                             Button("2 Hours") { startSession(duration: 2 * 3600) }
                                 .buttonStyle(PrimaryButtonStyle())
 
-                            Button("4 Hours") { startSession(duration: 4 * 3600) }
+                            Button("Unlimited") { startSession(duration: 0) }
                                 .buttonStyle(PrimaryButtonStyle())
                         }
 
@@ -73,6 +73,7 @@ struct ContentView: View {
     private func isDisconnected(_ status: SessionStatus) -> Bool {
         if case .disconnected = status { return true }
         if case .failed = status { return true }
+        if case .expired = status { return true }
         return false
     }
 }

@@ -5,19 +5,31 @@ struct SessionActiveView: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            VStack {
-                Text(sessionManager.formattedTimeRemaining)
-                    .font(.system(size: 48, weight: .bold, design: .monospaced))
+            if sessionManager.totalDuration == 0 {
+                VStack {
+                    Text("Unlimited")
+                        .font(.system(size: 48, weight: .bold, design: .monospaced))
 
-                Text("Time Remaining")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    Text("Session Duration")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .padding()
+            } else {
+                VStack {
+                    Text(sessionManager.formattedTimeRemaining)
+                        .font(.system(size: 48, weight: .bold, design: .monospaced))
+
+                    Text("Time Remaining")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .padding()
+
+                ProgressView(value: sessionManager.totalDuration - sessionManager.timeRemaining, total: sessionManager.totalDuration)
+                    .progressViewStyle(LinearProgressViewStyle())
+                    .padding(.horizontal)
             }
-            .padding()
-
-            ProgressView(value: sessionManager.totalDuration - sessionManager.timeRemaining, total: sessionManager.totalDuration)
-                .progressViewStyle(LinearProgressViewStyle())
-                .padding(.horizontal)
 
             Button("Stop Session") {
                 sessionManager.stopSession()

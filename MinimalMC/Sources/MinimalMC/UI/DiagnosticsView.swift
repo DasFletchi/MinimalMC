@@ -14,7 +14,7 @@ struct DiagnosticsView: View {
             Section(header: Text("Network (Mock)")) {
                 DiagnosticRow(title: "Packets Sent", value: "0") // Connect to real counters in NetworkTransport
                 DiagnosticRow(title: "Packets Received", value: "0")
-                DiagnosticRow(title: "Last KeepAlive", value: "N/A")
+                DiagnosticRow(title: "Last KeepAlive", value: sessionManager.currentPingMs >= 0 ? "\(sessionManager.currentPingMs) ms" : "N/A")
             }
         }
         .navigationTitle("Diagnostics")

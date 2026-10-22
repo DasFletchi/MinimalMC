@@ -6,11 +6,13 @@ struct SettingsView: View {
     @AppStorage("serverHost") private var serverHost: String = "localhost"
     @AppStorage("serverPort") private var serverPort: String = "25565"
     @AppStorage("username") private var username: String = "MinimalPlayer"
+    @AppStorage("autoReconnect") private var autoReconnect: Bool = true
 
     var body: some View {
         NavigationView {
             Form {
                 Section(header: Text("Server Connection")) {
+                    Toggle("Auto Reconnect", isOn: $autoReconnect)
                     TextField("Server Address", text: $serverHost)
                         .autocapitalization(.none)
                         .disableAutocorrection(true)

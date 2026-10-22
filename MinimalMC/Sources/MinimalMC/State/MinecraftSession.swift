@@ -33,6 +33,7 @@ public actor MinecraftSession {
 
     public var onStatusChanged: ((SessionStatus) -> Void)?
     public var onDisconnect: ((String) -> Void)?
+    public var onPingUpdated: ((Int) -> Void)?
 
     public init(serverHost: String, serverPort: UInt16, username: String, uuid: UUID? = nil) {
         self.serverHost = serverHost
@@ -178,7 +179,13 @@ public actor MinecraftSession {
                     var responseData = Data()
                     responseData.append(data)
                     let keepAliveResponse = Packet(packetID: 0x03, data: responseData)
-                    transport.send(packet: keepAliveResponse)
+                    let sendTime = Date()
+                    transport.send(packet: keepAliveResponse) { [weak self] in
+                        let ping = Int(Date().timeIntervalSince(sendTime) * 1000)
+                        Task { [weak self] in
+                            await self?.updatePing(ping)
+                        }
+                    }
                 case 0x06: // Registry Data
                     break
                 case 0x0E: // Clientbound Known Packs
@@ -194,7 +201,13 @@ public actor MinecraftSession {
                 case 0x24: // Keep Alive (1.20.4)
                     let keepAliveID = try DataTypes.readLong(from: &data)
                     let response = KeepAlivePacket.create(keepAliveID: keepAliveID)
-                    transport.send(packet: response)
+                    let sendTime = Date()
+                    transport.send(packet: response) { [weak self] in
+                        let ping = Int(Date().timeIntervalSince(sendTime) * 1000)
+                        Task { [weak self] in
+                            await self?.updatePing(ping)
+                        }
+                    }
                 case 0x3E: // Synchronize Player Position (1.20.4)
                     // Skip x, y, z, yaw, pitch, flags to get teleport ID
                     let _ = try DataTypes.readLong(from: &data) // x
@@ -220,6 +233,12 @@ public actor MinecraftSession {
             }
         } catch {
             print("Packet handling error: \(error)")
+        }
+    }
+
+    private func updatePing(_ ping: Int) {
+        DispatchQueue.main.async {
+            self.onPingUpdated?(ping)
         }
     }
 
