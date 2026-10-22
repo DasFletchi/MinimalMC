@@ -23,14 +23,10 @@ public struct LoginStartPacket {
     public static func create(username: String, uuid: UUID?) throws -> Packet {
         var data = Data()
         try DataTypes.writeString(username, to: &data)
-        // UUID handling depends on specific version (e.g., 1.20.4 protocol 765)
-        if let uuid = uuid {
-            data.append(contentsOf: [1]) // Has UUID
-            let uuidBytes = withUnsafeBytes(of: uuid.uuid) { Data($0) }
-            data.append(uuidBytes)
-        } else {
-            data.append(contentsOf: [0]) // No UUID
-        }
+        // 1.20.4 protocol 765 requires UUID directly without a boolean flag
+        let resolvedUUID = uuid ?? UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        let uuidBytes = withUnsafeBytes(of: resolvedUUID.uuid) { Data($0) }
+        data.append(uuidBytes)
         return Packet(packetID: 0x00, data: data) // 1.20.4 Login Start ID
     }
 }

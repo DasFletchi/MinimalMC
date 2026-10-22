@@ -100,8 +100,8 @@ public actor MinecraftSession {
                 switch packet.packetID {
                 case 0x00: // Disconnect
                     // In 1.20.4, disconnect reasons are NBT formatted Text Components, not VarInt Strings.
-                    // For minimal MVP, we safely skip parsing the full NBT to avoid crashes and display a generic message.
-                    let reason = "Disconnected by server during login"
+                    // We attempt to read the string (JSON), and fallback to generic error.
+                    let reason = (try? DataTypes.readString(from: &data)) ?? "Disconnected by server during login"
                     updateStatus(.disconnected(reason))
                     transport.disconnect()
                 case 0x01: // Encryption Request
