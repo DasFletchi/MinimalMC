@@ -39,12 +39,14 @@ public class SessionManager: ObservableObject {
         session?.start()
         startTimer()
         BGTaskManager.shared.scheduleTask()
+        BGTaskManager.shared.startBackgroundSession()
     }
 
     public func stopSession() {
         session?.stop()
         session = nil
         stopTimer()
+        BGTaskManager.shared.stopBackgroundSession()
 
         DispatchQueue.main.async {
             self.status = .stopped
