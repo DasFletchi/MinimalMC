@@ -1,10 +1,10 @@
-// swift-tools-version:5.5
+// swift-tools-version: 5.9
 import PackageDescription
 
 let package = Package(
     name: "MinimalMC",
     platforms: [
-        .iOS(.v15)
+        .iOS(.v15), .macOS(.v12)
     ],
     products: [
         .library(name: "MinimalMC", targets: ["MinimalMC"])
@@ -13,7 +13,7 @@ let package = Package(
         .target(
             name: "MinimalMC",
             path: "MinimalMC/Sources/MinimalMC",
-            exclude: ["MinimalMCApp.swift"] // Exclude app entry point for testing library code
+            exclude: ["MinimalMCApp.swift"]
         ),
         .testTarget(
             name: "MinimalMCTests",
