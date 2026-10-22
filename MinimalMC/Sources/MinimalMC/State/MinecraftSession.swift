@@ -28,8 +28,20 @@ public actor MinecraftSession {
 
     private let serverHost: String
     private let serverPort: UInt16
+
     private let username: String
     private let uuid: UUID?
+
+    // Position Tracking
+    private var currentX: Double = 0
+    private var currentY: Double = 0
+    private var currentZ: Double = 0
+    private var currentYaw: Float = 0
+    private var currentPitch: Float = 0
+
+    // Anti-AFK
+    private var antiAfkTask: Task<Void, Never>?
+
 
     public var onStatusChanged: ((SessionStatus) -> Void)?
     public var onDisconnect: ((String) -> Void)?
@@ -196,17 +208,25 @@ public actor MinecraftSession {
                     let response = KeepAlivePacket.create(keepAliveID: keepAliveID)
                     transport.send(packet: response)
                 case 0x3E: // Synchronize Player Position (1.20.4)
-                    // Skip x, y, z, yaw, pitch, flags to get teleport ID
-                    let _ = try DataTypes.readLong(from: &data) // x
-                    let _ = try DataTypes.readLong(from: &data) // y
-                    let _ = try DataTypes.readLong(from: &data) // z
-                    let _ = data.removeFirst(4) // yaw
-                    let _ = data.removeFirst(4) // pitch
-                    let _ = data.removeFirst(1) // flags
+                    let x = try DataTypes.readDouble(from: &data)
+                    let y = try DataTypes.readDouble(from: &data)
+                    let z = try DataTypes.readDouble(from: &data)
+                    let yaw = try DataTypes.readFloat(from: &data)
+                    let pitch = try DataTypes.readFloat(from: &data)
+                    let flags = data.removeFirst()
                     let teleportID = try VarInt.read(from: &data)
+
+                    if (flags & 0x01) != 0 { currentX += x } else { currentX = x }
+                    if (flags & 0x02) != 0 { currentY += y } else { currentY = y }
+                    if (flags & 0x04) != 0 { currentZ += z } else { currentZ = z }
+                    if (flags & 0x08) != 0 { currentYaw += yaw } else { currentYaw = yaw }
+                    if (flags & 0x10) != 0 { currentPitch += pitch } else { currentPitch = pitch }
 
                     let confirm = TeleportConfirmPacket.create(teleportID: teleportID)
                     transport.send(packet: confirm)
+
+                    let posRot = PlayerPositionAndRotationPacket.create(x: currentX, y: currentY, z: currentZ, yaw: currentYaw, pitch: currentPitch, onGround: true)
+                    transport.send(packet: posRot)
                 case 0x1B: // Disconnect (1.20.4)
                     let reason = "Disconnected by server during play"
                     updateStatus(.disconnected(reason))
@@ -228,5 +248,34 @@ public actor MinecraftSession {
         DispatchQueue.main.async {
             self.onStatusChanged?(newStatus)
         }
+
+        if newStatus == .online {
+            startAntiAfkLoop()
+        } else {
+            antiAfkTask?.cancel()
+            antiAfkTask = nil
+        }
+    }
+
+    private func startAntiAfkLoop() {
+        antiAfkTask?.cancel()
+        antiAfkTask = Task { [weak self] in
+            while !Task.isCancelled {
+                // Configurable timer (e.g. 45 seconds)
+                try? await Task.sleep(nanoseconds: 45 * 1_000_000_000)
+                guard !Task.isCancelled else { break }
+                if let self = self {
+                    let packet = await self.createAntiAfkPacket()
+                    await self.transport.send(packet: packet)
+                } else {
+                    break
+                }
+            }
+        }
+    }
+
+    private func createAntiAfkPacket() -> Packet {
+        // Send Set Player Position update with onGround = true to avoid kicks
+        return PlayerPositionPacket.create(x: currentX, y: currentY, z: currentZ, onGround: true)
     }
 }

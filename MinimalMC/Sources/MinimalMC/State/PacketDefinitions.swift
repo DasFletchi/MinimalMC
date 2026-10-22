@@ -75,3 +75,21 @@ public struct PlayerPositionPacket {
         return Packet(packetID: 0x17, data: data) // 1.20.4 Set Player Position
     }
 }
+
+public struct PlayerPositionAndRotationPacket {
+    public static func create(x: Double, y: Double, z: Double, yaw: Float, pitch: Float, onGround: Bool) -> Packet {
+        var data = Data()
+        var bx = x.bitPattern.bigEndian
+        data.append(withUnsafeBytes(of: &bx) { Data($0) })
+        var by = y.bitPattern.bigEndian
+        data.append(withUnsafeBytes(of: &by) { Data($0) })
+        var bz = z.bitPattern.bigEndian
+        data.append(withUnsafeBytes(of: &bz) { Data($0) })
+        var byaw = yaw.bitPattern.bigEndian
+        data.append(withUnsafeBytes(of: &byaw) { Data($0) })
+        var bpitch = pitch.bitPattern.bigEndian
+        data.append(withUnsafeBytes(of: &bpitch) { Data($0) })
+        data.append(contentsOf: [onGround ? 1 : 0])
+        return Packet(packetID: 0x18, data: data) // 1.20.4 Set Player Position and Rotation
+    }
+}

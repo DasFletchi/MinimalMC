@@ -29,7 +29,7 @@ public struct DataTypes {
         guard data.count >= 2 else {
             throw ProtocolError.insufficientData
         }
-        let value = data.prefix(2).withUnsafeBytes { $0.load(as: UInt16.self) }
+        let value = data.prefix(2).withUnsafeBytes { $0.loadUnaligned(as: UInt16.self) }
         data.removeFirst(2)
         return UInt16(bigEndian: value)
     }
@@ -43,7 +43,7 @@ public struct DataTypes {
         guard data.count >= 8 else {
             throw ProtocolError.insufficientData
         }
-        let value = data.prefix(8).withUnsafeBytes { $0.load(as: Int64.self) }
+        let value = data.prefix(8).withUnsafeBytes { $0.loadUnaligned(as: Int64.self) }
         data.removeFirst(8)
         return Int64(bigEndian: value)
     }
@@ -51,5 +51,23 @@ public struct DataTypes {
     public static func writeLong(_ value: Int64, to data: inout Data) {
         var bigEndianValue = value.bigEndian
         data.append(withUnsafeBytes(of: &bigEndianValue) { Data($0) })
+    }
+
+    public static func readDouble(from data: inout Data) throws -> Double {
+        guard data.count >= 8 else {
+            throw ProtocolError.insufficientData
+        }
+        let value = data.prefix(8).withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
+        data.removeFirst(8)
+        return Double(bitPattern: UInt64(bigEndian: value))
+    }
+
+    public static func readFloat(from data: inout Data) throws -> Float {
+        guard data.count >= 4 else {
+            throw ProtocolError.insufficientData
+        }
+        let value = data.prefix(4).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+        data.removeFirst(4)
+        return Float(bitPattern: UInt32(bigEndian: value))
     }
 }
