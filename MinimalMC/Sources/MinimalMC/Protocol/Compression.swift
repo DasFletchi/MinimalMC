@@ -56,13 +56,13 @@ public class PacketCompression {
         return result
     }
 
-    public static func decompress(_ data: inout Data) throws -> Data {
+    public static func decompress(from data: inout Data) throws -> Data {
         let uncompressedLength = try VarInt.read(from: &data)
         if uncompressedLength == 0 {
             return data
         }
 
-        if uncompressedLength > maxPacketSize {
+        if uncompressedLength < 0 || uncompressedLength > maxPacketSize {
             throw ProtocolError.invalidString("Uncompressed size exceeds maximum allowed packet size")
         }
 
@@ -94,7 +94,7 @@ public class PacketCompression {
                 status = inflate(&stream, Z_NO_FLUSH)
 
                 switch status {
-                case Z_NEED_DICT, Z_DATA_ERROR, Z_MEM_ERROR:
+                case Z_NEED_DICT, Z_DATA_ERROR, Z_MEM_ERROR, Z_BUF_ERROR, Z_STREAM_ERROR:
                     throw ProtocolError.invalidString("zlib inflate error \(status)")
                 default:
                     break
@@ -108,7 +108,8 @@ public class PacketCompression {
                 if decompressedData.count > uncompressedLength {
                     throw ProtocolError.invalidString("Decompressed data exceeds declared uncompressed length")
                 }
-            } while stream.avail_out == 0
+            } while status != Z_STREAM_END
+            guard stream.avail_in == 0 else { throw ProtocolError.invalidString("Trailing compressed data") }
         }
 
         if decompressedData.count != uncompressedLength {
