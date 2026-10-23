@@ -39,7 +39,7 @@ final class ProtocolTests: XCTestCase {
         }
     }
 
-    func testPacketFraming() throws {
+    func testFramingWithoutCompression() throws {
         let packet = Packet(packetID: 0x00, data: Data([0x01, 0x02, 0x03]))
         var framedData = PacketFraming.encode(packet)
 
@@ -49,6 +49,46 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(decodedPacket?.packetID, 0x00)
         XCTAssertEqual(decodedPacket?.data, Data([0x01, 0x02, 0x03]))
         XCTAssertTrue(framedData.isEmpty)
+    }
+
+    func testFramingWithCompressionUnderThreshold() throws {
+        let packet = Packet(packetID: 0x00, data: Data([0x01, 0x02, 0x03]))
+        let threshold = 256
+        var framedData = PacketFraming.encode(packet, compressionThreshold: threshold)
+
+        let decodedPacket = try PacketFraming.decode(from: &framedData, compressionThreshold: threshold)
+
+        XCTAssertNotNil(decodedPacket)
+        XCTAssertEqual(decodedPacket?.packetID, 0x00)
+        XCTAssertEqual(decodedPacket?.data, Data([0x01, 0x02, 0x03]))
+        XCTAssertTrue(framedData.isEmpty)
+    }
+
+    func testFramingWithCompressionOverThreshold() throws {
+        let originalData = Data(repeating: 0x42, count: 1000)
+        let packet = Packet(packetID: 0x01, data: originalData)
+        let threshold = 256
+        var framedData = PacketFraming.encode(packet, compressionThreshold: threshold)
+
+        let decodedPacket = try PacketFraming.decode(from: &framedData, compressionThreshold: threshold)
+
+        XCTAssertNotNil(decodedPacket)
+        XCTAssertEqual(decodedPacket?.packetID, 0x01)
+        XCTAssertEqual(decodedPacket?.data, originalData)
+        XCTAssertTrue(framedData.isEmpty)
+    }
+
+    func testFramingPartialData() throws {
+        let packet = Packet(packetID: 0x00, data: Data([0x01, 0x02, 0x03]))
+        let framedData = PacketFraming.encode(packet)
+
+        // Try decoding with only part of the data
+        var partialData = framedData.prefix(2)
+        let snapshot = partialData
+        let decodedPacket = try PacketFraming.decode(from: &partialData)
+
+        XCTAssertNil(decodedPacket)
+        XCTAssertEqual(partialData, snapshot) // Data should not be consumed
     }
 
     func testCompression() throws {
@@ -73,5 +113,30 @@ final class ProtocolTests: XCTestCase {
         let decrypted = decryption.decrypt(encrypted)
 
         XCTAssertEqual(originalData, decrypted)
+    }
+
+    func testContinuousEncryptionStream() throws {
+        let secret = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+        let encryptor = PacketEncryption(sharedSecret: secret)
+        let decryptor = PacketEncryption(sharedSecret: secret)
+
+        let chunks = [
+            Data("Chunk 1: First packet".utf8),
+            Data("Chunk 2: Second packet follows".utf8),
+            Data("Chunk 3: Short".utf8),
+            Data(repeating: 0x42, count: 1000)
+        ]
+
+        var decryptedChunks: [Data] = []
+
+        for chunk in chunks {
+            let encrypted = encryptor.encrypt(chunk)
+            let decrypted = decryptor.decrypt(encrypted)
+            decryptedChunks.append(decrypted)
+        }
+
+        for (i, original) in chunks.enumerated() {
+            XCTAssertEqual(original, decryptedChunks[i], "Failed at chunk \(i)")
+        }
     }
 }

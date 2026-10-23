@@ -15,47 +15,56 @@ struct ContentView: View {
                 StatusView(status: sessionManager.status)
 
                 if sessionManager.status == .idle || sessionManager.status == .stopped || isDisconnected(sessionManager.status) {
-                    VStack(spacing: 16) {
+                    VStack(spacing: 20) {
                         Text("Start Session")
-                            .font(.headline)
+                            .font(.title2)
+                            .fontWeight(.semibold)
 
-                        HStack(spacing: 16) {
-                            Button("30 Min") { startSession(duration: 30 * 60) }
-                                .buttonStyle(PrimaryButtonStyle())
+                        VStack(spacing: 12) {
+                            HStack(spacing: 12) {
+                                Button("30 Min") { startSession(duration: 30 * 60) }
+                                    .buttonStyle(PrimaryButtonStyle())
 
-                            Button("2 Hours") { startSession(duration: 2 * 3600) }
-                                .buttonStyle(PrimaryButtonStyle())
+                                Button("2 Hours") { startSession(duration: 2 * 3600) }
+                                    .buttonStyle(PrimaryButtonStyle())
 
-                            Button("4 Hours") { startSession(duration: 4 * 3600) }
-                                .buttonStyle(PrimaryButtonStyle())
-                        }
-
-                        HStack {
-                            TextField("Custom Min", text: $customDurationMinutes)
-                                .keyboardType(.numberPad)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .frame(width: 100)
-
-                            Button("Start Custom") {
-                                if let minutes = Double(customDurationMinutes) {
-                                    startSession(duration: minutes * 60)
-                                }
+                                Button("Unlimited") { startSession(duration: 0) }
+                                    .buttonStyle(PrimaryButtonStyle())
                             }
-                            .buttonStyle(SecondaryButtonStyle())
+
+                            HStack {
+                                TextField("Custom Min", text: $customDurationMinutes)
+                                    .keyboardType(.numberPad)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .frame(width: 100)
+
+                                Button("Start Custom") {
+                                    if let minutes = Double(customDurationMinutes), minutes.isFinite, minutes > 0 {
+                                        startSession(duration: minutes * 60)
+                                    }
+                                }
+                                .buttonStyle(SecondaryButtonStyle())
+                            }
                         }
                     }
+                    .padding()
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(16)
+                    .padding(.horizontal)
                 } else {
                     SessionActiveView()
                 }
 
                 Spacer()
             }
-            .padding()
+            .padding(.top)
             .navigationTitle("MinimalMC")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showSettings = true }) {
-                        Image(systemName: "gearshape")
+                        Image(systemName: "gearshape.fill")
+                            .foregroundColor(.primary)
                     }
                 }
             }
@@ -66,6 +75,8 @@ struct ContentView: View {
     }
 
     private func startSession(duration: TimeInterval) {
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
         guard let port = UInt16(serverPort) else { return }
         sessionManager.startSession(duration: duration, host: serverHost, port: port, username: username)
     }
@@ -80,11 +91,12 @@ struct ContentView: View {
 struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .font(.subheadline.weight(.semibold))
             .frame(maxWidth: .infinity)
-            .padding()
+            .padding(.vertical, 12)
             .background(Color.blue)
             .foregroundColor(.white)
-            .cornerRadius(8)
+            .cornerRadius(12)
             .opacity(configuration.isPressed ? 0.8 : 1.0)
     }
 }
@@ -92,10 +104,12 @@ struct PrimaryButtonStyle: ButtonStyle {
 struct SecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .padding()
-            .background(Color.gray.opacity(0.2))
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(Color.gray.opacity(0.15))
             .foregroundColor(.primary)
-            .cornerRadius(8)
+            .cornerRadius(12)
             .opacity(configuration.isPressed ? 0.8 : 1.0)
     }
 }

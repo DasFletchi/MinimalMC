@@ -7,38 +7,39 @@ public class PacketEncryption {
     private var decryptor: CCCryptorRef?
 
     public init(sharedSecret: Data) {
-        let key = sharedSecret.withUnsafeBytes { $0.baseAddress }
-        let iv = sharedSecret.withUnsafeBytes { $0.baseAddress }
+        sharedSecret.withUnsafeBytes { secretBytes in
+            guard let baseAddress = secretBytes.baseAddress else { return }
 
-        CCCryptorCreateWithMode(
-            CCOperation(kCCEncrypt),
-            CCMode(kCCModeCFB8),
-            CCAlgorithm(kCCAlgorithmAES),
-            ccNoPadding,
-            iv,
-            key,
-            sharedSecret.count,
-            nil,
-            0,
-            0,
-            0,
-            &encryptor
-        )
+            CCCryptorCreateWithMode(
+                CCOperation(kCCEncrypt),
+                CCMode(kCCModeCFB8),
+                CCAlgorithm(kCCAlgorithmAES),
+                ccNoPadding,
+                baseAddress,
+                baseAddress,
+                sharedSecret.count,
+                nil,
+                0,
+                0,
+                0,
+                &self.encryptor
+            )
 
-        CCCryptorCreateWithMode(
-            CCOperation(kCCDecrypt),
-            CCMode(kCCModeCFB8),
-            CCAlgorithm(kCCAlgorithmAES),
-            ccNoPadding,
-            iv,
-            key,
-            sharedSecret.count,
-            nil,
-            0,
-            0,
-            0,
-            &decryptor
-        )
+            CCCryptorCreateWithMode(
+                CCOperation(kCCDecrypt),
+                CCMode(kCCModeCFB8),
+                CCAlgorithm(kCCAlgorithmAES),
+                ccNoPadding,
+                baseAddress,
+                baseAddress,
+                sharedSecret.count,
+                nil,
+                0,
+                0,
+                0,
+                &self.decryptor
+            )
+        }
     }
 
     deinit {
@@ -47,42 +48,54 @@ public class PacketEncryption {
     }
 
     public func encrypt(_ data: Data) -> Data {
-        guard let encryptor = encryptor else { return data }
-        var result = Data(count: data.count)
+        guard let encryptor = encryptor, !data.isEmpty else { return data }
+
+        let outputLength = CCCryptorGetOutputLength(encryptor, data.count, false)
+        var result = Data(count: outputLength)
         var moved: Int = 0
 
         data.withUnsafeBytes { dataBytes in
+            guard let dataAddress = dataBytes.baseAddress else { return }
             result.withUnsafeMutableBytes { resultBytes in
+                guard let resultAddress = resultBytes.baseAddress else { return }
                 CCCryptorUpdate(
                     encryptor,
-                    dataBytes.baseAddress,
+                    dataAddress,
                     data.count,
-                    resultBytes.baseAddress,
-                    result.count,
+                    resultAddress,
+                    outputLength,
                     &moved
                 )
             }
         }
+
+        result.count = moved
         return result
     }
 
     public func decrypt(_ data: Data) -> Data {
-        guard let decryptor = decryptor else { return data }
-        var result = Data(count: data.count)
+        guard let decryptor = decryptor, !data.isEmpty else { return data }
+
+        let outputLength = CCCryptorGetOutputLength(decryptor, data.count, false)
+        var result = Data(count: outputLength)
         var moved: Int = 0
 
         data.withUnsafeBytes { dataBytes in
+            guard let dataAddress = dataBytes.baseAddress else { return }
             result.withUnsafeMutableBytes { resultBytes in
+                guard let resultAddress = resultBytes.baseAddress else { return }
                 CCCryptorUpdate(
                     decryptor,
-                    dataBytes.baseAddress,
+                    dataAddress,
                     data.count,
-                    resultBytes.baseAddress,
-                    result.count,
+                    resultAddress,
+                    outputLength,
                     &moved
                 )
             }
         }
+
+        result.count = moved
         return result
     }
 }

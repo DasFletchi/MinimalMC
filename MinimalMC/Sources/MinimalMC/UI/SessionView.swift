@@ -4,30 +4,49 @@ struct SessionActiveView: View {
     @ObservedObject var sessionManager = SessionManager.shared
 
     var body: some View {
-        VStack(spacing: 24) {
-            VStack {
-                Text(sessionManager.formattedTimeRemaining)
-                    .font(.system(size: 48, weight: .bold, design: .monospaced))
+        VStack(spacing: 32) {
+            ZStack {
+                Circle()
+                    .stroke(Color.gray.opacity(0.2), lineWidth: 12)
 
-                Text("Time Remaining")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                Circle()
+                    .trim(from: 0, to: sessionManager.totalDuration > 0 ? CGFloat(sessionManager.timeRemaining / sessionManager.totalDuration) : 0)
+                    .stroke(Color.blue, style: StrokeStyle(lineWidth: 12, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.linear(duration: 1.0), value: sessionManager.timeRemaining)
+
+                VStack {
+                    Text(sessionManager.formattedTimeRemaining)
+                        .font(.system(size: 40, weight: .bold, design: .monospaced))
+
+                    Text("Time Remaining")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
             }
-            .padding()
+            .frame(width: 200, height: 200)
+            .padding(.top, 16)
 
-            ProgressView(value: sessionManager.totalDuration - sessionManager.timeRemaining, total: sessionManager.totalDuration)
-                .progressViewStyle(LinearProgressViewStyle())
-                .padding(.horizontal)
-
-            Button("Stop Session") {
+            Button(action: {
+                let generator = UIImpactFeedbackGenerator(style: .medium)
+                generator.impactOccurred()
                 sessionManager.stopSession()
+            }) {
+                Text("Stop Session")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.red)
+                    .foregroundColor(.white)
+                    .cornerRadius(16)
             }
-            .buttonStyle(DestructiveButtonStyle())
+            .padding(.horizontal)
 
             NavigationLink(destination: DiagnosticsView()) {
                 Text("View Diagnostics")
+                    .font(.subheadline)
+                    .foregroundColor(.blue)
             }
-            .padding(.top, 16)
         }
     }
 }
@@ -36,17 +55,22 @@ struct StatusView: View {
     let status: SessionStatus
 
     var body: some View {
-        HStack {
+        HStack(spacing: 8) {
             Circle()
                 .fill(colorForStatus(status))
-                .frame(width: 12, height: 12)
+                .frame(width: 8, height: 8)
 
             Text(textForStatus(status))
-                .font(.headline)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(colorForStatus(status))
         }
-        .padding()
-        .background(Color.gray.opacity(0.1))
-        .cornerRadius(8)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(
+            Capsule()
+                .fill(colorForStatus(status).opacity(0.15))
+        )
     }
 
     private func colorForStatus(_ status: SessionStatus) -> Color {
@@ -75,17 +99,5 @@ struct StatusView: View {
         case .disconnected(let reason): return "Disconnected: \(reason)"
         case .failed(let error): return "Failed: \(error)"
         }
-    }
-}
-
-struct DestructiveButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(Color.red)
-            .foregroundColor(.white)
-            .cornerRadius(8)
-            .opacity(configuration.isPressed ? 0.8 : 1.0)
     }
 }
