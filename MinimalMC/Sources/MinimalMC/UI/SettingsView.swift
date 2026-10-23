@@ -106,8 +106,11 @@ struct SettingsView: View {
                 deviceCode = code
                 authMessage = code.message
                 let token = try await auth.pollForToken(clientId: MicrosoftAuth.clientID, deviceCode: code.deviceCode, interval: code.interval ?? 5, expiresIn: code.expiresIn)
+                authMessage = "Signing into Xbox Live…"
                 let xbox = try await auth.authenticateWithXbox(msAccessToken: token.accessToken)
+                authMessage = "Authorizing Xbox account…"
                 let xsts = try await auth.obtainXSTSToken(xblToken: xbox.token, uhs: xbox.uhs)
+                authMessage = "Signing into Minecraft…"
                 let login = try await auth.loginWithMinecraft(uhs: xbox.uhs, xstsToken: xsts)
                 username = login.profile.name
                 offlineMode = false
@@ -115,7 +118,7 @@ struct SettingsView: View {
             } catch is CancellationError {
                 authMessage = "Sign-in cancelled"
             } catch {
-                authMessage = "Sign-in failed: \(error)"
+                authMessage = "Sign-in failed: \(error.localizedDescription)"
             }
         }
     }

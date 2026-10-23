@@ -64,7 +64,7 @@ public struct TokenErrorResponse: Codable {
     }
 }
 
-public enum DeviceAuthError: Error {
+public enum DeviceAuthError: LocalizedError {
     case invalidResponse
     case networkError(Error)
     case authorizationPending
@@ -73,6 +73,19 @@ public enum DeviceAuthError: Error {
     case expiredToken
     case noRefreshToken
     case other(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .authorizationDeclined: return "Microsoft sign-in was declined."
+        case .badVerificationCode: return "The Microsoft sign-in code is invalid. Start sign-in again."
+        case .expiredToken: return "The Microsoft sign-in code expired. Start sign-in again."
+        case .noRefreshToken: return "Sign in with Microsoft again to renew this session."
+        case .authorizationPending: return "Complete Microsoft sign-in in the browser."
+        case .invalidResponse: return "Microsoft returned an invalid response."
+        case .networkError: return "Microsoft sign-in could not reach the service."
+        case .other: return "Microsoft rejected this sign-in request."
+        }
+    }
 }
 
 struct XBLRequest: Codable {
@@ -128,7 +141,9 @@ public class MicrosoftAuth {
     public static let shared = MicrosoftAuth()
     public var isOfflineMode: Bool = true
 
-    private init() {}
+    private let session: URLSession
+
+    init(session: URLSession = .shared) { self.session = session }
 
     private func form(_ values: [String: String]) -> Data {
         var allowed = CharacterSet.alphanumerics
@@ -150,13 +165,11 @@ public class MicrosoftAuth {
 
         request.httpBody = form(["client_id": clientId, "scope": "XboxLive.signin offline_access"])
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw DeviceAuthError.invalidResponse
-        }
+        try AuthenticationFailure.requireSuccess(response, data: data, step: .deviceCode)
 
-        let info = try JSONDecoder().decode(DeviceCodeInfo.self, from: data)
+        let info = try AuthenticationFailure.decode(DeviceCodeInfo.self, from: data, step: .deviceCode)
         return info
     }
 
@@ -177,14 +190,14 @@ public class MicrosoftAuth {
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
             request.httpBody = body
 
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                throw DeviceAuthError.invalidResponse
+                throw AuthenticationFailure(step: .microsoftToken, statusCode: nil, hint: "The service did not return an HTTP response.")
             }
 
             if httpResponse.statusCode == 200 {
-                let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
+                let tokenResponse = try AuthenticationFailure.decode(TokenResponse.self, from: data, step: .microsoftToken)
                 saveTokens(tokenResponse: tokenResponse)
                 return tokenResponse
             } else {
@@ -202,10 +215,10 @@ public class MicrosoftAuth {
                     case "expired_token":
                         throw DeviceAuthError.expiredToken
                     default:
-                        throw DeviceAuthError.other(errorResponse.error)
+                        throw AuthenticationFailure.rejected(step: .microsoftToken, status: httpResponse.statusCode, data: data)
                     }
                 } else {
-                    throw DeviceAuthError.invalidResponse
+                    throw AuthenticationFailure.rejected(step: .microsoftToken, status: httpResponse.statusCode, data: data)
                 }
             }
         }
@@ -226,13 +239,11 @@ public class MicrosoftAuth {
 
         request.httpBody = form(["grant_type": "refresh_token", "client_id": clientId, "refresh_token": refreshToken])
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw DeviceAuthError.invalidResponse
-        }
+        try AuthenticationFailure.requireSuccess(response, data: data, step: .refreshToken)
 
-        let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
+        let tokenResponse = try AuthenticationFailure.decode(TokenResponse.self, from: data, step: .refreshToken)
         saveTokens(tokenResponse: tokenResponse)
         return tokenResponse
     }
@@ -283,14 +294,12 @@ public class MicrosoftAuth {
 
         request.httpBody = try JSONEncoder().encode(xblReq)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw AuthError.invalidResponse
-        }
+        let (data, response) = try await session.data(for: request)
+        try AuthenticationFailure.requireSuccess(response, data: data, step: .xbox)
 
-        let decoded = try JSONDecoder().decode(XBLResponse.self, from: data)
+        let decoded = try AuthenticationFailure.decode(XBLResponse.self, from: data, step: .xbox)
         guard let uhs = decoded.DisplayClaims.xui.first?.uhs else {
-            throw AuthError.invalidResponse
+            throw AuthenticationFailure(step: .xbox, statusCode: 200, hint: "Xbox did not return an account profile.")
         }
 
         return (decoded.Token, uhs)
@@ -315,17 +324,14 @@ public class MicrosoftAuth {
 
         request.httpBody = try JSONEncoder().encode(xstsReq)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let httpResponse = response as? HTTPURLResponse
-
-        let decoded = try JSONDecoder().decode(XSTSResponse.self, from: data)
-
-        if let xErr = decoded.XErr {
-            throw AuthError.xboxError(code: xErr)
+        let (data, response) = try await session.data(for: request)
+        try AuthenticationFailure.requireSuccess(response, data: data, step: .xsts)
+        let decoded = try AuthenticationFailure.decode(XSTSResponse.self, from: data, step: .xsts)
+        if decoded.XErr != nil {
+            throw AuthenticationFailure.rejected(step: .xsts, status: 200, data: data)
         }
-
-        guard httpResponse?.statusCode == 200, let token = decoded.Token else {
-            throw AuthError.invalidResponse
+        guard let token = decoded.Token else {
+            throw AuthenticationFailure(step: .xsts, statusCode: 200, hint: "Xbox did not return an authorization token.")
         }
 
         return token
@@ -342,12 +348,10 @@ public class MicrosoftAuth {
         let mcReq = MinecraftLoginRequest(identityToken: "XBL3.0 x=\(uhs);\(xstsToken)")
         loginRequest.httpBody = try JSONEncoder().encode(mcReq)
 
-        let (loginData, loginResponse) = try await URLSession.shared.data(for: loginRequest)
-        guard let httpLoginResponse = loginResponse as? HTTPURLResponse, httpLoginResponse.statusCode == 200 else {
-            throw AuthError.invalidResponse
-        }
+        let (loginData, loginResponse) = try await session.data(for: loginRequest)
+        try AuthenticationFailure.requireSuccess(loginResponse, data: loginData, step: .minecraft)
 
-        let mcToken = try JSONDecoder().decode(MinecraftLoginResponse.self, from: loginData).access_token
+        let mcToken = try AuthenticationFailure.decode(MinecraftLoginResponse.self, from: loginData, step: .minecraft).access_token
 
         // 2. Get Minecraft Profile
         let profileUrl = URL(string: "https://api.minecraftservices.com/minecraft/profile")!
@@ -355,12 +359,10 @@ public class MicrosoftAuth {
         profileRequest.httpMethod = "GET"
         profileRequest.setValue("Bearer \(mcToken)", forHTTPHeaderField: "Authorization")
 
-        let (profileData, profileResponse) = try await URLSession.shared.data(for: profileRequest)
-        guard let httpProfileResponse = profileResponse as? HTTPURLResponse, httpProfileResponse.statusCode == 200 else {
-            throw AuthError.invalidResponse
-        }
+        let (profileData, profileResponse) = try await session.data(for: profileRequest)
+        try AuthenticationFailure.requireSuccess(profileResponse, data: profileData, step: .profile)
 
-        let profile = try JSONDecoder().decode(MinecraftProfile.self, from: profileData)
+        let profile = try AuthenticationFailure.decode(MinecraftProfile.self, from: profileData, step: .profile)
 
         _ = KeychainManager.shared.saveToken(mcToken, for: "minecraft_access_token")
         _ = KeychainManager.shared.saveToken(profile.id, for: "minecraft_profile_id")
