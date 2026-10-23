@@ -1,7 +1,7 @@
 name: iOS Tests and IPA Release
 on:
   push:
-    branches: [main, codex/integrate-prs]
+    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -20,14 +20,10 @@ jobs:
         run: |
           gem install xcodeproj --no-document --user-install
           ruby generate_project.rb
-      - name: Choose available iPhone simulator
-        run: |
-          DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; print(next(d["udid"] for ds in json.load(sys.stdin)["devices"].values() for d in ds if d["name"].startswith("iPhone")))')
-          echo "SIMULATOR_ID=$DEVICE" >> "$GITHUB_ENV"
-      - name: Run protocol and mock-server tests
+      - name: Run protocol and TCP mock-server tests
         run: |
           set -o pipefail
-          xcodebuild test -project MinimalMC.xcodeproj -scheme MinimalMC -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -parallel-testing-enabled NO -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO | tee test.log
+          swift test | tee test.log
       - name: Build unsigned device archive
         run: |
           set -o pipefail

@@ -53,9 +53,9 @@ Since this project uses a Ruby script to generate the `.xcodeproj` file:
 The app requests BGProcessingTask time and loops silent audio while a session is active. iOS may suspend or terminate the process; this does not guarantee hours of connectivity under screen lock. Silent audio is not a guarantee of App Store acceptance. Test background behavior on a real device.
 
 ## Download an IPA
-GitHub Actions runs the simulator test suite and creates an unsigned arm64 device archive. Successful pushes to `main` publish a GitHub prerelease containing `MinimalMC-unsigned.ipa`; version tags (`v*`) create versioned releases. Pull requests upload IPA artifacts without publishing releases.
+GitHub Actions runs the native macOS protocol test suite and creates an unsigned arm64 device archive. Successful pushes to `main` publish a GitHub prerelease containing `MinimalMC-unsigned.ipa`; version tags (`v*`) create versioned releases. Pull requests upload IPA artifacts without publishing releases.
 
-Sign the IPA with AltStore, SideStore, or your own signing setup before installing. No signing certificate is stored in the repository. Build/test logs and `.xcresult` files are uploaded even when a build fails.
+Sign the IPA with AltStore, SideStore, or your own signing setup before installing. No signing certificate is stored in the repository. Build/test logs are uploaded even when a build fails. The generated Xcode scheme also supports running the tests locally in an iOS simulator.
 
 ## UI Design Principles
 - **Minimalist & Native:** Uses standard SwiftUI components to ensure it feels like a native iOS utility app.
@@ -63,6 +63,6 @@ Sign the IPA with AltStore, SideStore, or your own signing setup before installi
 - **Diagnostic Separation:** The main screen only shows what is necessary (Time remaining, Status, Stop button). Detailed packet info is relegated to the Diagnostics View.
 
 ## Testing
-The iOS workflow runs codec, malformed-input, framing, compression, streaming-encryption, login-layout and TCP mock-server integration tests before archiving. The mock server sends Set Compression and Login Success in succession to exercise the decoding state change. The Swift package exposes the networking/protocol core for macOS tests; UIKit screens and background/session managers belong to the iOS app target.
+The workflow runs native macOS tests for codec, malformed-input, framing, compression, streaming-encryption, login-layout and TCP mock-server integration tests before archiving. The mock server sends Set Compression and Login Success in succession to exercise the decoding state change. The Swift package exposes the networking/protocol core for macOS tests; UIKit screens and background/session managers belong to the iOS app target.
 
 These checks do not prove real-server compatibility, successful Microsoft account authorization, background longevity, or avoidance of server AFK rules.
