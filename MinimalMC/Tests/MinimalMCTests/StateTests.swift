@@ -35,15 +35,15 @@ final class StateTests: XCTestCase {
         XCTAssertEqual(packet.packetID, 0x17)
 
         var data = packet.data
-        let bx = data.prefix(8).withUnsafeBytes { $0.load(as: UInt64.self) }
+        let bx = data.prefix(8).withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
         data.removeFirst(8)
         XCTAssertEqual(Double(bitPattern: UInt64(bigEndian: bx)), 10.5)
 
-        let by = data.prefix(8).withUnsafeBytes { $0.load(as: UInt64.self) }
+        let by = data.prefix(8).withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
         data.removeFirst(8)
         XCTAssertEqual(Double(bitPattern: UInt64(bigEndian: by)), 64.0)
 
-        let bz = data.prefix(8).withUnsafeBytes { $0.load(as: UInt64.self) }
+        let bz = data.prefix(8).withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
         data.removeFirst(8)
         XCTAssertEqual(Double(bitPattern: UInt64(bigEndian: bz)), -10.5)
 
