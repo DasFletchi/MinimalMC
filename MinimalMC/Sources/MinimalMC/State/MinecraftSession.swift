@@ -29,8 +29,9 @@ public actor MinecraftSession {
     private let serverHost: String
     private let serverPort: UInt16
 
-    private let username: String
-    private let uuid: UUID?
+    private let authenticate: () async throws -> VerifiedMinecraftAccount
+    private var account: VerifiedMinecraftAccount?
+    private var startGeneration = UUID()
 
     // Position Tracking
     private var currentX: Double = 0
@@ -46,19 +47,41 @@ public actor MinecraftSession {
     public var onStatusChanged: ((SessionStatus) -> Void)?
     public var onDisconnect: ((String) -> Void)?
 
-    public init(serverHost: String, serverPort: UInt16, username: String, uuid: UUID? = nil) {
+    public init(serverHost: String, serverPort: UInt16) {
         self.serverHost = serverHost
         self.serverPort = serverPort
-        self.username = username
-        self.uuid = uuid
+        self.authenticate = { try await MicrosoftAuth.shared.verifiedAccount() }
     }
+
+    // Dependency injection for isolated tests, not exposed by the app's public API.
+    #if DEBUG
+    init(serverHost: String, serverPort: UInt16, authenticate: @escaping () async throws -> VerifiedMinecraftAccount) {
+        self.serverHost = serverHost
+        self.serverPort = serverPort
+        self.authenticate = authenticate
+    }
+    #endif
 
     public func setCallbacks(onStatusChanged: ((SessionStatus) -> Void)? = nil, onDisconnect: ((String) -> Void)? = nil) {
         self.onStatusChanged = onStatusChanged
         self.onDisconnect = onDisconnect
     }
 
-    public func start() {
+    public func start() async throws {
+        let attempt = UUID()
+        startGeneration = attempt
+        account = nil
+        updateStatus(.authenticating)
+        do {
+            let verified = try await authenticate()
+            try Task.checkCancellation()
+            guard startGeneration == attempt else { throw CancellationError() }
+            account = verified
+        } catch {
+            if startGeneration == attempt { updateStatus(.failed(error.localizedDescription)) }
+            throw error
+        }
+        // No TCP connection or handshake is sent before both checks succeed.
         updateStatus(.connecting)
 
         transport.onReceive = { [weak self] packet in
@@ -74,24 +97,24 @@ public actor MinecraftSession {
         transport.connect(host: serverHost, port: serverPort)
 
         // After connect, initiate handshake
-        Task {
-            do {
-                let handshake = try HandshakePacket.create(protocolVersion: protocolVersion, serverAddress: serverHost, serverPort: serverPort, nextState: .login)
-                self.sendPacket(handshake)
-
-                currentState = .login
-                updateStatus(.loggingIn)
-
-                let loginStart = try LoginStartPacket.create(username: username, uuid: uuid)
-                self.sendPacket(loginStart)
-            } catch {
-                updateStatus(.failed("Failed to send handshake: \(error.localizedDescription)"))
-                transport.disconnect()
-            }
+        do {
+            let handshake = try HandshakePacket.create(protocolVersion: protocolVersion, serverAddress: serverHost, serverPort: serverPort, nextState: .login)
+            self.sendPacket(handshake)
+            currentState = .login
+            updateStatus(.loggingIn)
+            guard let account = self.account else { throw CancellationError() }
+            let loginStart = try LoginStartPacket.create(username: account.profile.name, uuid: account.profile.uuid)
+            self.sendPacket(loginStart)
+        } catch {
+            updateStatus(.failed("Failed to send handshake: \(error.localizedDescription)"))
+            transport.disconnect()
+            throw error
         }
     }
 
     public func stop() {
+        startGeneration = UUID()
+        account = nil
         updateStatus(.stopped)
         transport.disconnect()
     }
@@ -154,13 +177,13 @@ public actor MinecraftSession {
                     }
 
                     let serverHash = MojangServerHash.generate(serverId: serverId, sharedSecret: sharedSecret, publicKey: publicKeyData)
-                    guard let profileId = self.uuid?.uuidString, let accessToken = KeychainManager.shared.loadToken(for: "minecraft_access_token") else {
-                        updateStatus(.failed("Sign in with Microsoft before joining an online-mode server"))
+                    guard let account = self.account else {
+                        updateStatus(.failed("A verified Minecraft account is required"))
                         transport.disconnect()
                         return
                     }
 
-                    MojangJoin.joinServer(accessToken: accessToken, selectedProfile: profileId, serverHash: serverHash) { success in
+                    MojangJoin.joinServer(accessToken: account.accessToken, selectedProfile: account.profile.id, serverHash: serverHash) { success in
                         Task {
                             guard success else {
                                 await self.authenticationFailed()
@@ -309,3 +332,4 @@ public actor MinecraftSession {
         return PlayerPositionPacket.create(x: currentX, y: currentY, z: currentZ, onGround: true)
     }
 }
+

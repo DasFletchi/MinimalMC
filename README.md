@@ -23,7 +23,8 @@ This client is designed for background persistence using standard iOS APIs. It d
 - ❌ 3D World Rendering (No chunks or blocks)
 - ❌ Entities & Inventory Management
 - ❌ Chat & Command interface (MVP scope)
-- Microsoft sign-in uses MinimalMC's built-in public application ID. Users only need a Microsoft account with a Minecraft Java license. Device-code → Xbox Live → XSTS → Minecraft exchange is implemented; full account authentication still needs device testing.
+- Microsoft device-code sign-in uses MinimalMC's own public application ID. Every server connection and reconnect requires fresh Minecraft Java license and profile checks. No guest/offline identity mode is available.
+- **Current blocker:** Mojang has not approved this application ID. Minecraft Services returns HTTP 403 (invalid app registration). The API review application is being prepared, not yet submitted; successful live login cannot be claimed until approval and device testing.
 
 ## System Requirements
 - **OS:** iOS 15.0+
@@ -40,8 +41,11 @@ Since this project uses a Ruby script to generate the `.xcodeproj` file:
 ## Start Instructions
 1. Launch the app.
 2. Go to settings (gear icon) and configure your test server IP and Port.
-3. Use offline mode for an offline-mode test server. For online-mode servers, tap **Sign in with Microsoft**, open the Microsoft sign-in page, enter the displayed code, and return to Settings until the app confirms your player name. No application ID or Azure registration is needed for end users.
-4. Tap on a session duration on the main screen to begin.
+3. Tap **Sign in with Microsoft**, open the Microsoft sign-in page, enter the displayed code, and return to Settings until the app confirms your verified Java player name. A Java license is required for every server, including servers configured with online-mode=false. No application ID or Azure registration is needed for end users.
+4. Tap on a session duration on the main screen to begin. The app checks Java ownership and the account profile again before opening the server connection. Failed or unavailable checks block access; cached credentials and old offline preferences do not bypass them.
+5. Signing out stops the active session and deletes stored Microsoft credentials.
+
+The license check requires a Java entitlement returned by Minecraft Services. Accounts for which the service returns no Java entitlement (including some subscription scenarios) are blocked; subscription support has not been validated. Use this client only on servers whose rules permit automated/AFK clients.
 
 ## Architecture
 - `NetworkTransport`: Wraps `NWConnection` for async TCP stream handling.
@@ -66,3 +70,4 @@ Sign the IPA with AltStore, SideStore, or your own signing setup before installi
 The workflow runs native macOS tests for codec, malformed-input, framing, compression, streaming-encryption, login-layout and TCP mock-server integration tests before archiving. The mock server sends Set Compression and Login Success in succession to exercise the decoding state change. The Swift package exposes the networking/protocol core for macOS tests; UIKit screens and background/session managers belong to the iOS app target.
 
 These checks do not prove real-server compatibility, successful Microsoft account authorization, background longevity, or avoidance of server AFK rules.
+

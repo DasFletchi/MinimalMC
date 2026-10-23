@@ -4,7 +4,6 @@ struct ContentView: View {
     @StateObject private var sessionManager = SessionManager.shared
     @AppStorage("serverHost") private var serverHost: String = "localhost"
     @AppStorage("serverPort") private var serverPort: String = "25565"
-    @AppStorage("username") private var username: String = "MinimalPlayer"
 
     @State private var showSettings = false
     @State private var customDurationMinutes: String = "60"
@@ -19,6 +18,11 @@ struct ContentView: View {
                         Text("Start Session")
                             .font(.title2)
                             .fontWeight(.semibold)
+                        Text("A signed-in Microsoft account with a verified Java Edition license is required for every server.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button("Microsoft account settings") { showSettings = true }
 
                         VStack(spacing: 12) {
                             HStack(spacing: 12) {
@@ -78,7 +82,7 @@ struct ContentView: View {
         let generator = UIImpactFeedbackGenerator(style: .medium)
         generator.impactOccurred()
         guard let port = UInt16(serverPort) else { return }
-        sessionManager.startSession(duration: duration, host: serverHost, port: port, username: username)
+        sessionManager.startSession(duration: duration, host: serverHost, port: port)
     }
 
     private func isDisconnected(_ status: SessionStatus) -> Bool {
@@ -114,3 +118,4 @@ struct SecondaryButtonStyle: ButtonStyle {
             .opacity(configuration.isPressed ? 0.8 : 1.0)
     }
 }
+

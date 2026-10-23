@@ -1,7 +1,13 @@
 import Foundation
 import Security
 
-public class KeychainManager {
+protocol TokenStore {
+    @discardableResult func saveToken(_ token: String, for account: String) -> Bool
+    func loadToken(for account: String) -> String?
+    @discardableResult func deleteToken(for account: String) -> Bool
+}
+
+public class KeychainManager: TokenStore {
     public static let shared = KeychainManager()
 
     private init() {}
@@ -48,3 +54,4 @@ public class KeychainManager {
         return status == errSecSuccess
     }
 }
+

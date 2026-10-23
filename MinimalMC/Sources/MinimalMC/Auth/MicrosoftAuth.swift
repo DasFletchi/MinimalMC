@@ -135,15 +135,29 @@ struct MinecraftLoginResponse: Codable {
     let access_token: String
 }
 
+private struct MinecraftEntitlements: Decodable {
+    struct Item: Decodable { let name: String }
+    let items: [Item]
+}
+
+// Constructed only after fresh HTTPS ownership and profile checks.
+// Internal so tests can supply synthetic accounts without a production bypass.
+struct VerifiedMinecraftAccount {
+    let accessToken: String
+    let profile: MinecraftProfile
+}
+
 public class MicrosoftAuth {
     // Public OAuth application identifier; not a client secret.
     public static let clientID = "83734d15-5ed1-4486-aa17-e84511d2250f"
     public static let shared = MicrosoftAuth()
-    public var isOfflineMode: Bool = true
-
     private let session: URLSession
+    private let tokenStore: TokenStore
 
-    init(session: URLSession = .shared) { self.session = session }
+    init(session: URLSession = .shared, tokenStore: TokenStore = KeychainManager.shared) {
+        self.session = session
+        self.tokenStore = tokenStore
+    }
 
     private func form(_ values: [String: String]) -> Data {
         var allowed = CharacterSet.alphanumerics
@@ -198,6 +212,7 @@ public class MicrosoftAuth {
 
             if httpResponse.statusCode == 200 {
                 let tokenResponse = try AuthenticationFailure.decode(TokenResponse.self, from: data, step: .microsoftToken)
+                try Task.checkCancellation()
                 saveTokens(tokenResponse: tokenResponse)
                 return tokenResponse
             } else {
@@ -226,7 +241,7 @@ public class MicrosoftAuth {
     }
 
     public func refreshToken(clientId: String) async throws -> TokenResponse {
-        guard let refreshToken = KeychainManager.shared.loadToken(for: "microsoft_refresh_token") else {
+        guard let refreshToken = tokenStore.loadToken(for: "microsoft_refresh_token") else {
             throw DeviceAuthError.noRefreshToken
         }
 
@@ -244,13 +259,14 @@ public class MicrosoftAuth {
         try AuthenticationFailure.requireSuccess(response, data: data, step: .refreshToken)
 
         let tokenResponse = try AuthenticationFailure.decode(TokenResponse.self, from: data, step: .refreshToken)
+        try Task.checkCancellation()
         saveTokens(tokenResponse: tokenResponse)
         return tokenResponse
     }
 
     public func getValidAccessToken(clientId: String) async throws -> String {
-        if let accessToken = KeychainManager.shared.loadToken(for: "microsoft_access_token"),
-           let expiresAtString = KeychainManager.shared.loadToken(for: "microsoft_token_expires_at"),
+        if let accessToken = tokenStore.loadToken(for: "microsoft_access_token"), !accessToken.isEmpty,
+           let expiresAtString = tokenStore.loadToken(for: "microsoft_token_expires_at"),
            let expiresAt = TimeInterval(expiresAtString) {
 
             // If token expires in more than 5 minutes, we can use it
@@ -264,13 +280,13 @@ public class MicrosoftAuth {
     }
 
     private func saveTokens(tokenResponse: TokenResponse) {
-        _ = KeychainManager.shared.saveToken(tokenResponse.accessToken, for: "microsoft_access_token")
+        _ = tokenStore.saveToken(tokenResponse.accessToken, for: "microsoft_access_token")
         if let refreshToken = tokenResponse.refreshToken {
-            _ = KeychainManager.shared.saveToken(refreshToken, for: "microsoft_refresh_token")
+            _ = tokenStore.saveToken(refreshToken, for: "microsoft_refresh_token")
         }
 
         let expiresAt = Date().timeIntervalSince1970 + TimeInterval(tokenResponse.expiresIn)
-        _ = KeychainManager.shared.saveToken(String(expiresAt), for: "microsoft_token_expires_at")
+        _ = tokenStore.saveToken(String(expiresAt), for: "microsoft_token_expires_at")
     }
 
 
@@ -352,10 +368,25 @@ public class MicrosoftAuth {
         try AuthenticationFailure.requireSuccess(loginResponse, data: loginData, step: .minecraft)
 
         let mcToken = try AuthenticationFailure.decode(MinecraftLoginResponse.self, from: loginData, step: .minecraft).access_token
+        guard !mcToken.isEmpty else {
+            throw AuthenticationFailure(step: .minecraft, statusCode: 200, hint: "Minecraft returned an empty access token.")
+        }
 
-        // 2. Get Minecraft Profile
+        // A successful token exchange alone does not prove a Java license.
+        let ownershipURL = URL(string: "https://api.minecraftservices.com/entitlements/license?requestId=\(UUID().uuidString)")!
+        var ownershipRequest = URLRequest(url: ownershipURL, cachePolicy: .reloadIgnoringLocalCacheData)
+        ownershipRequest.setValue("Bearer \(mcToken)", forHTTPHeaderField: "Authorization")
+        ownershipRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (ownershipData, ownershipResponse) = try await session.data(for: ownershipRequest)
+        try AuthenticationFailure.requireSuccess(ownershipResponse, data: ownershipData, step: .ownership)
+        let ownership = try AuthenticationFailure.decode(MinecraftEntitlements.self, from: ownershipData, step: .ownership)
+        guard ownership.items.contains(where: { $0.name == "game_minecraft" || $0.name == "product_minecraft" }) else {
+            throw AuthenticationFailure(step: .ownership, statusCode: 200, hint: "Minecraft did not confirm a Java Edition license for this account. Server access is disabled until ownership can be verified.")
+        }
+
+        // Also require the player's own valid Java profile, never a typed username.
         let profileUrl = URL(string: "https://api.minecraftservices.com/minecraft/profile")!
-        var profileRequest = URLRequest(url: profileUrl)
+        var profileRequest = URLRequest(url: profileUrl, cachePolicy: .reloadIgnoringLocalCacheData)
         profileRequest.httpMethod = "GET"
         profileRequest.setValue("Bearer \(mcToken)", forHTTPHeaderField: "Authorization")
 
@@ -363,10 +394,24 @@ public class MicrosoftAuth {
         try AuthenticationFailure.requireSuccess(profileResponse, data: profileData, step: .profile)
 
         let profile = try AuthenticationFailure.decode(MinecraftProfile.self, from: profileData, step: .profile)
-
-        _ = KeychainManager.shared.saveToken(mcToken, for: "minecraft_access_token")
-        _ = KeychainManager.shared.saveToken(profile.id, for: "minecraft_profile_id")
+        guard let uuid = profile.uuid, uuid != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
+              !profile.name.isEmpty else {
+            throw AuthenticationFailure(step: .profile, statusCode: 200, hint: "Minecraft returned an invalid Java player profile.")
+        }
+        try Task.checkCancellation()
         return (mcToken, profile)
+    }
+
+    // Used for every initial connection and reconnect. Cached Minecraft tokens,
+    // usernames and old offline preferences never authorize server access.
+    func verifiedAccount() async throws -> VerifiedMinecraftAccount {
+        try Task.checkCancellation()
+        let microsoftToken = try await getValidAccessToken(clientId: Self.clientID)
+        let xbox = try await authenticateWithXbox(msAccessToken: microsoftToken)
+        let xsts = try await obtainXSTSToken(xblToken: xbox.token, uhs: xbox.uhs)
+        let login = try await loginWithMinecraft(uhs: xbox.uhs, xstsToken: xsts)
+        try Task.checkCancellation()
+        return VerifiedMinecraftAccount(accessToken: login.accessToken, profile: login.profile)
     }
 
     public enum AuthError: Error {
@@ -378,7 +423,8 @@ public class MicrosoftAuth {
 
     public func signOut() {
         for key in ["microsoft_access_token", "microsoft_refresh_token", "microsoft_token_expires_at", "minecraft_access_token", "minecraft_profile_id"] {
-            _ = KeychainManager.shared.deleteToken(for: key)
+            _ = tokenStore.deleteToken(for: key)
         }
     }
 }
+

@@ -26,6 +26,9 @@ class MockMinecraftServer {
     var clientDisconnected = false
 
     var keepAliveExpectation: XCTestExpectation?
+    var connectionExpectation: XCTestExpectation?
+    var receivedUsername: String?
+    var receivedUUID: UUID?
     var disconnectExpectation: XCTestExpectation?
 
     private var receiveBuffer = Data()
@@ -102,6 +105,7 @@ class MockMinecraftServer {
             }
 
             if newSocket >= 0 {
+                self.connectionExpectation?.fulfill()
                 self.clientSocket = newSocket
                 self.handleClient(newSocket)
             } else {
@@ -167,7 +171,8 @@ class MockMinecraftServer {
                 }
             } else if packetID == 0x00 && receivedHandshake && !receivedLoginStart {
                 receivedLoginStart = true
-                _ = try DataTypes.readString(from: &data) // username
+                receivedUsername = try DataTypes.readString(from: &data)
+                receivedUUID = try DataTypes.readUUID(from: &data)
 
                 var compressionData = Data()
                 VarInt.write(256, to: &compressionData)
@@ -250,7 +255,9 @@ final class MockServerTests: XCTestCase {
         let disconnectExp = XCTestExpectation(description: "Server registers client disconnect")
         server.disconnectExpectation = disconnectExp
 
-        let session = MinecraftSession(serverHost: "127.0.0.1", serverPort: port, username: "TestPlayer")
+        let session = MinecraftSession(serverHost: "127.0.0.1", serverPort: port, authenticate: {
+            VerifiedMinecraftAccount(accessToken: "TEST_ONLY", profile: MinecraftProfile(id: "0123456789abcdef0123456789abcdef", name: "TestPlayer"))
+        })
 
         var reachedLoggingIn = false
         var reachedConfiguring = false
@@ -274,7 +281,7 @@ final class MockServerTests: XCTestCase {
         }
 
         )
-        await session.start()
+        try await session.start()
 
         await fulfillment(of: [loggingInExp, configuringExp, onlineExp, keepAliveExp], timeout: 5.0)
 
@@ -284,6 +291,8 @@ final class MockServerTests: XCTestCase {
 
         XCTAssertTrue(server.receivedHandshake, "Server should receive Handshake")
         XCTAssertTrue(server.receivedLoginStart, "Server should receive Login Start")
+        XCTAssertEqual(server.receivedUsername, "TestPlayer")
+        XCTAssertEqual(server.receivedUUID, UUID(uuidString: "01234567-89ab-cdef-0123-456789abcdef"))
         XCTAssertTrue(server.sentCompression, "Server should send Set Compression")
         XCTAssertTrue(server.sentLoginSuccess, "Server should send Login Success")
         XCTAssertTrue(server.sentConfiguration, "Server should send Finish Configuration")
@@ -297,3 +306,4 @@ final class MockServerTests: XCTestCase {
         XCTAssertTrue(reachedOnline, "Client status should transition to .online")
     }
 }
+

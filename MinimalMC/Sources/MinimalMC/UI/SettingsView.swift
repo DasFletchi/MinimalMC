@@ -5,8 +5,7 @@ struct SettingsView: View {
 
     @AppStorage("serverHost") private var serverHost: String = "localhost"
     @AppStorage("serverPort") private var serverPort: String = "25565"
-    @AppStorage("username") private var username: String = "MinimalPlayer"
-    @AppStorage("offlineMode") private var offlineMode: Bool = true
+    @State private var signedInName: String = ""
     @AppStorage("autoReconnect") private var autoReconnect: Bool = false
 
     @State private var deviceCode: DeviceCodeInfo?
@@ -35,15 +34,12 @@ struct SettingsView: View {
                             .keyboardType(.numberPad)
                     }
 
-                    Toggle("Offline Mode", isOn: $offlineMode)
                     Toggle("Auto-Reconnect", isOn: $autoReconnect)
                 }
 
                 Section(header: Text("Authentication")) {
-                    TextField("Offline username", text: $username)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                    Text("Sign in with the Microsoft account that owns Minecraft: Java Edition.")
+                    if !signedInName.isEmpty { Text("Verified player: \(signedInName)") }
+                    Text("Sign in with the Microsoft account that owns Minecraft: Java Edition. Ownership is checked before every server connection, including reconnections.")
                         .font(.caption).foregroundColor(.secondary)
                     if let code = deviceCode {
                         Text("Enter code: \(code.userCode)").font(.headline)
@@ -63,9 +59,9 @@ struct SettingsView: View {
                     }
                     Button("Sign Out") {
                         authTask?.cancel()
+                        SessionManager.shared.stopSession()
                         MicrosoftAuth.shared.signOut()
-                        username = "MinimalPlayer"
-                        offlineMode = true
+                        signedInName = ""
                         signingIn = false
                         deviceCode = nil
                         authMessage = "Signed out"
@@ -96,6 +92,9 @@ struct SettingsView: View {
         }
     }
     private func beginSignIn() {
+        SessionManager.shared.stopSession()
+        MicrosoftAuth.shared.signOut()
+        signedInName = ""
         signingIn = true
         authMessage = "Requesting Microsoft sign-in code…"
         authTask = Task { @MainActor in
@@ -110,10 +109,9 @@ struct SettingsView: View {
                 let xbox = try await auth.authenticateWithXbox(msAccessToken: token.accessToken)
                 authMessage = "Authorizing Xbox account…"
                 let xsts = try await auth.obtainXSTSToken(xblToken: xbox.token, uhs: xbox.uhs)
-                authMessage = "Signing into Minecraft…"
+                authMessage = "Checking Minecraft Java ownership and profile…"
                 let login = try await auth.loginWithMinecraft(uhs: xbox.uhs, xstsToken: xsts)
-                username = login.profile.name
-                offlineMode = false
+                signedInName = login.profile.name
                 authMessage = "Signed in as \(login.profile.name)"
             } catch is CancellationError {
                 authMessage = "Sign-in cancelled"
@@ -123,3 +121,4 @@ struct SettingsView: View {
         }
     }
 }
+

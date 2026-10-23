@@ -7,6 +7,7 @@ enum AuthenticationStep: String {
     case xbox = "Xbox Live sign-in"
     case xsts = "Xbox account authorization"
     case minecraft = "Minecraft sign-in"
+    case ownership = "Minecraft Java ownership check"
     case profile = "Minecraft Java profile"
 }
 
@@ -78,3 +79,4 @@ struct AuthenticationFailure: LocalizedError {
         }
     }
 }
+

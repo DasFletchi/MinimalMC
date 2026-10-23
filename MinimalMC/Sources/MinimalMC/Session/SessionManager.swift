@@ -12,13 +12,13 @@ public class SessionManager: ObservableObject {
 
     private var currentHost: String = ""
     private var currentPort: UInt16 = 0
-    private var currentUsername: String = ""
     private var reconnectAttempt = 0
     private var isIntentionalDisconnect = false
 
     private var generation = UUID()
     private var reconnectWork: DispatchWorkItem?
     private var session: MinecraftSession?
+    private var connectionTask: Task<Void, Never>?
     private var timer: Timer?
     private var targetEndDate: Date?
 
@@ -26,12 +26,11 @@ public class SessionManager: ObservableObject {
 
     private init() {}
 
-    public func startSession(duration: TimeInterval, host: String, port: UInt16, username: String) {
+    public func startSession(duration: TimeInterval, host: String, port: UInt16) {
         guard duration.isFinite, duration >= 0, !host.isEmpty, port > 0 else { return }
         stopConnection()
         self.currentHost = host
         self.currentPort = port
-        self.currentUsername = username
         self.isIntentionalDisconnect = false
         self.reconnectAttempt = 0
 
@@ -51,20 +50,11 @@ public class SessionManager: ObservableObject {
     }
 
     private func connect() {
-        let offline = UserDefaults.standard.object(forKey: "offlineMode") as? Bool ?? true
-        let storedProfile = KeychainManager.shared.loadToken(for: "minecraft_profile_id")
-        let profile = storedProfile.flatMap { MinecraftProfile(id: $0, name: currentUsername).uuid }
-        if !offline && (profile == nil || KeychainManager.shared.loadToken(for: "minecraft_access_token") == nil) {
-            status = .failed("Sign in with Microsoft in Settings first")
-            stopTimer()
-            BGTaskManager.shared.stopBackgroundSession()
-            return
-        }
-        session = MinecraftSession(serverHost: currentHost, serverPort: currentPort, username: currentUsername, uuid: offline ? nil : profile)
+        session = MinecraftSession(serverHost: currentHost, serverPort: currentPort)
 
         let newSession = session!
         let currentGeneration = generation
-        Task {
+        connectionTask = Task {
         await newSession.setCallbacks(onStatusChanged: { [weak self] newStatus in
             guard let self = self else { return }
             DispatchQueue.main.async {
@@ -90,7 +80,20 @@ public class SessionManager: ObservableObject {
         }
 
         )
-        await newSession.start()
+        do {
+            try Task.checkCancellation()
+            try await newSession.start()
+        } catch is CancellationError {
+            // Stop/sign-out/new session invalidated this attempt.
+        } catch {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, self.generation == currentGeneration else { return }
+                self.stopTimer()
+                BGTaskManager.shared.stopBackgroundSession()
+                self.status = .failed(error.localizedDescription)
+                self.onSessionEnded?()
+            }
+        }
         }
     }
 
@@ -132,6 +135,8 @@ public class SessionManager: ObservableObject {
 
     private func stopConnection() {
         generation = UUID()
+        connectionTask?.cancel()
+        connectionTask = nil
         reconnectWork?.cancel()
         reconnectWork = nil
         let old = session
@@ -200,3 +205,4 @@ public class SessionManager: ObservableObject {
         return String(format: "%02i:%02i:%02i", hours, minutes, seconds)
     }
 }
+
