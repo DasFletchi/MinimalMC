@@ -84,6 +84,7 @@ struct ContentView: View {
     private func isDisconnected(_ status: SessionStatus) -> Bool {
         if case .disconnected = status { return true }
         if case .failed = status { return true }
+        if case .expired = status { return true }
         return false
     }
 }

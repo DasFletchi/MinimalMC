@@ -13,7 +13,7 @@ let package = Package(
         .target(
             name: "MinimalMC",
             path: "MinimalMC/Sources/MinimalMC",
-            exclude: ["MinimalMCApp.swift"]
+            exclude: ["MinimalMCApp.swift", "UI", "Background", "Session"]
         ),
         .testTarget(
             name: "MinimalMCTests",

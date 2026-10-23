@@ -1,6 +1,6 @@
 # MinimalMC
 
-MinimalMC is a fully local, minimalist iOS Minecraft client MVP designed to maintain a connection to a Java server without rendering graphics or processing full chunks.
+MinimalMC is a native, minimalist iOS Minecraft client MVP designed to maintain a connection to a Java server without rendering graphics or processing full chunks.
 
 ## Project Overview
 This client is designed for background persistence using standard iOS APIs. It does not spawn heavy JVMs or Node.js runtimes. Everything is built natively in Swift using `NWConnection` for TCP transport and a custom Minecraft Protocol State Machine.
@@ -15,55 +15,54 @@ This client is designed for background persistence using standard iOS APIs. It d
 - ✅ Zlib Compression & CFB8-AES Encryption
 - ✅ Handshake, Login, Configuration, and Play state handling
 - ✅ Keep-Alive & Basic Movement/Teleport Confirm processing
-- ✅ Basic Background execution (`BGContinuedProcessingTask`)
-- ✅ Configurable Session Timers (30m, 2h, 4h, Custom)
+- ✅ Best-effort background execution (BGProcessingTask and silent audio)
+- ✅ Configurable Session Timers (30m, 2h, unlimited, custom)
 - ✅ Keychain token storage interface
 
 ## Unsupported Features
 - ❌ 3D World Rendering (No chunks or blocks)
 - ❌ Entities & Inventory Management
 - ❌ Chat & Command interface (MVP scope)
-- ❌ Real Microsoft Auth (Requires valid API credentials & XSTS flow; MVP provides mock interface)
+- Microsoft sign-in requires your own Microsoft application client ID and a Minecraft Java license. Device-code → Xbox Live → XSTS → Minecraft exchange is implemented, but live account authentication needs device testing.
 
 ## System Requirements
 - **OS:** iOS 15.0+
-- **Xcode:** 13.0+
+- **Xcode:** 15.0+
 
 ## Build Instructions
 Since this project uses a Ruby script to generate the `.xcodeproj` file:
 1. Ensure Ruby and the `xcodeproj` gem are installed.
 2. Run `ruby generate_project.rb` in the project root.
 3. Open `MinimalMC.xcodeproj` in Xcode.
-4. Select your Team in Signing & Capabilities.
+4. For direct device installation, enable signing and select your Team. CI builds are unsigned.
 5. Build and Run.
 
 ## Start Instructions
 1. Launch the app.
 2. Go to settings (gear icon) and configure your test server IP and Port.
-3. Select "Sign in with Microsoft" (currently mocks auth).
+3. Use offline mode for an offline-mode test server; for online-mode servers enter your Microsoft public-client application ID and complete Microsoft sign-in.
 4. Tap on a session duration on the main screen to begin.
 
 ## Architecture
 - `NetworkTransport`: Wraps `NWConnection` for async TCP stream handling.
 - `MinecraftSession`: Swift Actor managing protocol state machine and incoming packets.
 - `SessionManager`: ObservableObject tracking time remaining and UI status.
-- `BGTaskManager`: Manages `BGContinuedProcessingTask` to keep the connection alive when possible.
+- `BGTaskManager`: Manages `BGProcessingTask` to keep the connection alive when possible.
 
-## BGContinuedProcessingTask Explanation
-iOS strictly manages background execution. `BGContinuedProcessingTask` allows the app to request additional background time for long-running tasks. However, **this does NOT guarantee 2 or 4 hours of execution while the screen is locked.**
-The operating system may terminate the task based on battery state, thermal limits, or memory pressure. If the system rejects or expires the task, the app will gracefully disconnect and save its state.
+## Background execution limits
+The app requests BGProcessingTask time and loops silent audio while a session is active. iOS may suspend or terminate the process; this does not guarantee hours of connectivity under screen lock. Silent audio is not a guarantee of App Store acceptance. Test background behavior on a real device.
+
+## Download an IPA
+GitHub Actions runs the simulator test suite and creates an unsigned arm64 device archive. Successful pushes to `main` publish a GitHub prerelease containing `MinimalMC-unsigned.ipa`; version tags (`v*`) create versioned releases. Pull requests upload IPA artifacts without publishing releases.
+
+Sign the IPA with AltStore, SideStore, or your own signing setup before installing. No signing certificate is stored in the repository. Build/test logs and `.xcresult` files are uploaded even when a build fails.
 
 ## UI Design Principles
 - **Minimalist & Native:** Uses standard SwiftUI components to ensure it feels like a native iOS utility app.
 - **Clarity over Flashiness:** Avoids excessive gradients, shadows, or "AI-powered" buzzwords.
 - **Diagnostic Separation:** The main screen only shows what is necessary (Time remaining, Status, Stop button). Detailed packet info is relegated to the Diagnostics View.
 
-## Testing Status
-Unit tests have been written for:
-- VarInt / VarLong / UTF8 String Encoding
-- Packet Framing
-- Compression & Encryption routines
-- Protocol State Packet Definitions
-- Session Timer Logic
+## Testing
+The iOS workflow runs codec, malformed-input, framing, compression, streaming-encryption, login-layout and TCP mock-server integration tests before archiving. The mock server sends Set Compression and Login Success in succession to exercise the decoding state change. The Swift package exposes the networking/protocol core for macOS tests; UIKit screens and background/session managers belong to the iOS app target.
 
-*Note: Due to lack of a Swift/Xcode toolchain in the provided Linux container environment, all test execution results are explicitly marked as "not executed". The `swift test` command is not available, and therefore the unit tests could not be run.*
+These checks do not prove real-server compatibility, successful Microsoft account authorization, background longevity, or avoidance of server AFK rules.
