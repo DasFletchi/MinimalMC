@@ -2,7 +2,7 @@
 module.exports = async ({github, context, core}) => {
   const {owner, repo} = context.repo;
   const {data: repository} = await github.rest.repos.get({owner, repo});
-  for (let pull_number = 1; pull_number <= 16; pull_number++) {
+  for (let pull_number = 1; pull_number <= 17; pull_number++) {
     const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number});
     if (!pr.merged || pr.head.repo?.full_name !== `${owner}/${repo}` || pr.head.ref === repository.default_branch) continue;
     try {
