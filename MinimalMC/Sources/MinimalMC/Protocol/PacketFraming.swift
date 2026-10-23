@@ -11,10 +11,14 @@ public struct Packet {
 }
 
 public class PacketFraming {
-    public static func encode(_ packet: Packet) -> Data {
+    public static func encode(_ packet: Packet, compressionThreshold: Int? = nil) -> Data {
         var packetData = Data()
         VarInt.write(packet.packetID, to: &packetData)
         packetData.append(packet.data)
+
+        if let threshold = compressionThreshold {
+            packetData = PacketCompression.compress(packetData, threshold: threshold)
+        }
 
         var framedData = Data()
         VarInt.write(Int32(packetData.count), to: &framedData)
@@ -23,12 +27,13 @@ public class PacketFraming {
         return framedData
     }
 
-    public static func decode(from data: inout Data) throws -> Packet? {
+    public static func decode(from data: inout Data, compressionThreshold: Int? = nil) throws -> Packet? {
         let snapshot = data
         do {
+            // Stage 1: Frame Extraction
             let length = try VarInt.read(from: &data)
 
-            if length > 2_097_152 {
+            if length <= 0 || length > 2_097_152 {
                 throw ProtocolError.varIntTooBig // Over maximum packet size
             }
 
@@ -40,6 +45,12 @@ public class PacketFraming {
             var packetData = data.prefix(Int(length))
             data.removeFirst(Int(length))
 
+            // Stage 3: Decompression (Stage 2 Decryption is handled in NetworkTransport)
+            if compressionThreshold != nil {
+                packetData = try PacketCompression.decompress(from: &packetData)
+            }
+
+            // Stage 4: Packet ID Parsing
             let packetID = try VarInt.read(from: &packetData)
             return Packet(packetID: packetID, data: packetData)
 

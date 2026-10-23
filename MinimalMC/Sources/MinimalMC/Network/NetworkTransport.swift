@@ -8,10 +8,11 @@ public class NetworkTransport {
     private var encryption: PacketEncryption?
     private var compressionThreshold: Int?
 
-    public var onReceive: ((Packet) -> Void)?
+    public var onReceive: ((Packet) async -> Void)?
     public var onDisconnect: ((Error?) -> Void)?
 
     private var receiveBuffer = Data()
+    private var isProcessingPacket = false
 
     public init() {}
 
@@ -41,27 +42,21 @@ public class NetworkTransport {
     }
 
     public func disconnect() {
+        connection?.stateUpdateHandler = nil
         connection?.cancel()
         connection = nil
         isConnected = false
         encryption = nil
         compressionThreshold = nil
         receiveBuffer.removeAll()
+        let callback = onDisconnect
+        onDisconnect = nil
+        callback?(nil)
     }
 
-    public func send(packet: Packet) {
+    public func send(packet: Packet, completion: (() -> Void)? = nil) {
         queue.async {
-            var packetData = Data()
-            VarInt.write(packet.packetID, to: &packetData)
-            packetData.append(packet.data)
-
-            if let threshold = self.compressionThreshold {
-                packetData = PacketCompression.compress(packetData, threshold: threshold)
-            }
-
-            var framedData = Data()
-            VarInt.write(Int32(packetData.count), to: &framedData)
-            framedData.append(packetData)
+            var framedData = PacketFraming.encode(packet, compressionThreshold: self.compressionThreshold)
 
             if let encryption = self.encryption {
                 framedData = encryption.encrypt(framedData)
@@ -70,6 +65,8 @@ public class NetworkTransport {
             self.connection?.send(content: framedData, completion: .contentProcessed({ error in
                 if let error = error {
                     print("Send error: \(error)")
+                } else {
+                    completion?()
                 }
             }))
         }
@@ -101,24 +98,23 @@ public class NetworkTransport {
         }
 
         receiveBuffer.append(decryptedData)
+        guard !isProcessingPacket else { return }
 
         while true {
             var snapshot = receiveBuffer
             do {
-                if let packet = try PacketFraming.decode(from: &snapshot) {
+                if let packet = try PacketFraming.decode(from: &snapshot, compressionThreshold: compressionThreshold) {
                     receiveBuffer = snapshot
 
-                    var packetData = packet.data
-                    if compressionThreshold != nil {
-                        packetData = try PacketCompression.decompress(from: &packetData)
+                    isProcessingPacket = true
+                    Task {
+                        await self.onReceive?(packet)
+                        self.queue.async {
+                            self.isProcessingPacket = false
+                            self.processReceivedData(Data())
+                        }
                     }
-
-                    let packetID = try VarInt.read(from: &packetData)
-                    let decodedPacket = Packet(packetID: packetID, data: packetData)
-
-                    DispatchQueue.main.async {
-                        self.onReceive?(decodedPacket)
-                    }
+                    return
                 } else {
                     break // Need more data
                 }

@@ -1,0 +1,81 @@
+name: iOS Tests and IPA Release
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate Xcode project
+        run: |
+          gem install xcodeproj --no-document --user-install
+          ruby generate_project.rb
+      - name: Run protocol and TCP mock-server tests
+        run: |
+          set -o pipefail
+          swift test | tee test.log
+      - name: Build unsigned device archive
+        run: |
+          set -o pipefail
+          xcodebuild archive -project MinimalMC.xcodeproj -scheme MinimalMC -configuration Release -destination 'generic/platform=iOS' -archivePath build/MinimalMC.xcarchive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' | tee build.log
+      - name: Package IPA
+        run: |
+          mkdir -p build/ipa/Payload
+          cp -R build/MinimalMC.xcarchive/Products/Applications/MinimalMC.app build/ipa/Payload/
+          cd build/ipa
+          zip -qr ../MinimalMC-unsigned.ipa Payload
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: MinimalMC-unsigned
+          path: build/MinimalMC-unsigned.ipa
+          if-no-files-found: error
+      - name: Upload test results and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-logs
+          path: |
+            *.log
+            TestResults.xcresult
+  release:
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: MinimalMC-unsigned
+      - name: Publish IPA release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="$GITHUB_REF_NAME"
+            gh release create "$TAG" --verify-tag --title "MinimalMC $TAG" --notes 'Unsigned iOS IPA. Sign with AltStore, SideStore or another signing tool before installing.'
+          else
+            TAG="build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+            gh release create "$TAG" --target "$GITHUB_SHA" --prerelease --title "MinimalMC build $GITHUB_RUN_NUMBER" --notes 'Automated build from main. Unsigned IPA: sign before installing. Tests and device archive passed in GitHub Actions.'
+          fi
+          gh release upload "$TAG" MinimalMC-unsigned.ipa --clobber
+      - name: Delete merged PR branches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const cleanup = require('./.github/scripts/cleanup-branches.cjs');
+            await cleanup({github, context, core});

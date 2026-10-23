@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 import Security
 
-public enum SessionStatus: Equatable {
+public enum SessionStatus: Equatable, Sendable {
     case idle
     case starting
     case connecting
@@ -19,7 +19,7 @@ public enum SessionStatus: Equatable {
 }
 
 public actor MinecraftSession {
-    public let transport = NetworkTransport()
+    public nonisolated let transport = NetworkTransport()
     public var status: SessionStatus = .idle
     private var currentState: ProtocolState = .handshake
 
@@ -28,8 +28,20 @@ public actor MinecraftSession {
 
     private let serverHost: String
     private let serverPort: UInt16
+
     private let username: String
     private let uuid: UUID?
+
+    // Position Tracking
+    private var currentX: Double = 0
+    private var currentY: Double = 0
+    private var currentZ: Double = 0
+    private var currentYaw: Float = 0
+    private var currentPitch: Float = 0
+
+    // Anti-AFK
+    private var antiAfkTask: Task<Void, Never>?
+
 
     public var onStatusChanged: ((SessionStatus) -> Void)?
     public var onDisconnect: ((String) -> Void)?
@@ -41,13 +53,16 @@ public actor MinecraftSession {
         self.uuid = uuid
     }
 
+    public func setCallbacks(onStatusChanged: ((SessionStatus) -> Void)? = nil, onDisconnect: ((String) -> Void)? = nil) {
+        self.onStatusChanged = onStatusChanged
+        self.onDisconnect = onDisconnect
+    }
+
     public func start() {
         updateStatus(.connecting)
 
         transport.onReceive = { [weak self] packet in
-            Task {
-                await self?.handlePacket(packet)
-            }
+            await self?.handlePacket(packet)
         }
 
         transport.onDisconnect = { [weak self] error in
@@ -62,13 +77,13 @@ public actor MinecraftSession {
         Task {
             do {
                 let handshake = try HandshakePacket.create(protocolVersion: protocolVersion, serverAddress: serverHost, serverPort: serverPort, nextState: .login)
-                transport.send(packet: handshake)
+                self.sendPacket(handshake)
 
                 currentState = .login
                 updateStatus(.loggingIn)
 
                 let loginStart = try LoginStartPacket.create(username: username, uuid: uuid)
-                transport.send(packet: loginStart)
+                self.sendPacket(loginStart)
             } catch {
                 updateStatus(.failed("Failed to send handshake: \(error.localizedDescription)"))
                 transport.disconnect()
@@ -92,6 +107,7 @@ public actor MinecraftSession {
     }
 
     private func handlePacket(_ packet: Packet) {
+        DiagnosticsLogger.shared.log(id: packet.packetID, size: packet.data.count + 1, direction: "In", state: "\(currentState)")
         do {
             var data = packet.data
 
@@ -100,16 +116,18 @@ public actor MinecraftSession {
                 switch packet.packetID {
                 case 0x00: // Disconnect
                     // In 1.20.4, disconnect reasons are NBT formatted Text Components, not VarInt Strings.
-                    // For minimal MVP, we safely skip parsing the full NBT to avoid crashes and display a generic message.
-                    let reason = "Disconnected by server during login"
+                    // We attempt to read the string (JSON), and fallback to generic error.
+                    let reason = (try? DataTypes.readString(from: &data)) ?? "Disconnected by server during login"
                     updateStatus(.disconnected(reason))
                     transport.disconnect()
                 case 0x01: // Encryption Request
                     let serverId = try DataTypes.readString(from: &data)
                     let pubKeyLen = try VarInt.read(from: &data)
+                    guard pubKeyLen > 0, pubKeyLen <= data.count else { throw ProtocolError.insufficientData }
                     let publicKeyData = data.prefix(Int(pubKeyLen))
                     data.removeFirst(Int(pubKeyLen))
                     let tokenLen = try VarInt.read(from: &data)
+                    guard tokenLen > 0, tokenLen <= data.count else { throw ProtocolError.insufficientData }
                     let verifyTokenData = data.prefix(Int(tokenLen))
 
                     // Generate shared secret
@@ -135,16 +153,22 @@ public actor MinecraftSession {
                         return
                     }
 
-                    // Call MS auth mock
-                    // In a real app we need the accessToken from MicrosoftAuth
-                    // and we generate the server hash using SHA-1
-                    let serverHash = "mocked-hash"
+                    let serverHash = MojangServerHash.generate(serverId: serverId, sharedSecret: sharedSecret, publicKey: publicKeyData)
+                    guard let profileId = self.uuid?.uuidString, let accessToken = KeychainManager.shared.loadToken(for: "minecraft_access_token") else {
+                        updateStatus(.failed("Sign in with Microsoft before joining an online-mode server"))
+                        transport.disconnect()
+                        return
+                    }
 
-                    MicrosoftAuth.shared.joinServer(accessToken: "mocked-token", selectedProfile: "mocked-uuid", serverHash: serverHash) { success in
+                    MojangJoin.joinServer(accessToken: accessToken, selectedProfile: profileId, serverHash: serverHash) { success in
                         Task {
+                            guard success else {
+                                await self.authenticationFailed()
+                                return
+                            }
                             // Send Encryption Response
                             let response = try EncryptionResponsePacket.create(sharedSecret: encryptedSecret as Data, verifyToken: encryptedVerifyToken as Data)
-                            self.transport.send(packet: response)
+                            self.sendPacket(response)
                             self.transport.enableEncryption(sharedSecret: sharedSecret)
                         }
                     }
@@ -154,7 +178,7 @@ public actor MinecraftSession {
                     currentState = .configuration
                     updateStatus(.configuring)
                     let ack = Packet(packetID: 0x03, data: Data()) // Login Acknowledged
-                    transport.send(packet: ack)
+                    self.sendPacket(ack)
                 case 0x03: // Set Compression
                     let threshold = try VarInt.read(from: &data)
                     transport.setCompressionThreshold(Int(threshold))
@@ -164,28 +188,36 @@ public actor MinecraftSession {
             case .configuration:
                 switch packet.packetID {
                 case 0x00: // Clientbound Plugin Message
-                    break
+                    if let channel = try? DataTypes.readString(from: &data), channel == "minecraft:brand" {
+                        var responseData = Data()
+                        try? DataTypes.writeString("minecraft:brand", to: &responseData)
+                        try? DataTypes.writeString("MinimalMC", to: &responseData)
+                        let responsePacket = Packet(packetID: 0x01, data: responseData)
+                        transport.send(packet: responsePacket)
+                    }
                 case 0x01: // Disconnect
                     let reason = "Disconnected by server during configuration"
                     updateStatus(.disconnected(reason))
                     transport.disconnect()
                 case 0x02: // Finish Configuration
                     let ack = Packet(packetID: 0x02, data: Data()) // Acknowledge Finish Configuration
-                    transport.send(packet: ack)
+                    self.sendPacket(ack)
                     currentState = .play
                     updateStatus(.online)
                 case 0x03: // Keep Alive
                     var responseData = Data()
                     responseData.append(data)
                     let keepAliveResponse = Packet(packetID: 0x03, data: responseData)
-                    transport.send(packet: keepAliveResponse)
-                case 0x06: // Registry Data
-                    break
-                case 0x0E: // Clientbound Known Packs
-                    // Send Serverbound Known Packs
+                    self.sendPacket(keepAliveResponse)
+                case 0x04: // Ping
                     var responseData = Data()
-                    VarInt.write(0, to: &responseData)
-                    transport.send(packet: Packet(packetID: 0x07, data: responseData))
+                    responseData.append(data)
+                    let pongResponse = Packet(packetID: 0x04, data: responseData)
+                    self.sendPacket(pongResponse)
+                case 0x05: // Registry Data
+                    break
+                case 0x09: // Update Tags
+                    break
                 default:
                     break
                 }
@@ -194,19 +226,28 @@ public actor MinecraftSession {
                 case 0x24: // Keep Alive (1.20.4)
                     let keepAliveID = try DataTypes.readLong(from: &data)
                     let response = KeepAlivePacket.create(keepAliveID: keepAliveID)
-                    transport.send(packet: response)
+                    self.sendPacket(response)
                 case 0x3E: // Synchronize Player Position (1.20.4)
-                    // Skip x, y, z, yaw, pitch, flags to get teleport ID
-                    let _ = try DataTypes.readLong(from: &data) // x
-                    let _ = try DataTypes.readLong(from: &data) // y
-                    let _ = try DataTypes.readLong(from: &data) // z
-                    let _ = data.removeFirst(4) // yaw
-                    let _ = data.removeFirst(4) // pitch
-                    let _ = data.removeFirst(1) // flags
+                    let x = try DataTypes.readDouble(from: &data)
+                    let y = try DataTypes.readDouble(from: &data)
+                    let z = try DataTypes.readDouble(from: &data)
+                    let yaw = try DataTypes.readFloat(from: &data)
+                    let pitch = try DataTypes.readFloat(from: &data)
+                    guard !data.isEmpty else { throw ProtocolError.insufficientData }
+                    let flags = data.removeFirst()
                     let teleportID = try VarInt.read(from: &data)
 
+                    if (flags & 0x01) != 0 { currentX += x } else { currentX = x }
+                    if (flags & 0x02) != 0 { currentY += y } else { currentY = y }
+                    if (flags & 0x04) != 0 { currentZ += z } else { currentZ = z }
+                    if (flags & 0x08) != 0 { currentYaw += yaw } else { currentYaw = yaw }
+                    if (flags & 0x10) != 0 { currentPitch += pitch } else { currentPitch = pitch }
+
                     let confirm = TeleportConfirmPacket.create(teleportID: teleportID)
-                    transport.send(packet: confirm)
+                    self.sendPacket(confirm)
+
+                    let posRot = PlayerPositionAndRotationPacket.create(x: currentX, y: currentY, z: currentZ, yaw: currentYaw, pitch: currentPitch, onGround: true)
+                    self.sendPacket(posRot)
                 case 0x1B: // Disconnect (1.20.4)
                     let reason = "Disconnected by server during play"
                     updateStatus(.disconnected(reason))
@@ -223,10 +264,48 @@ public actor MinecraftSession {
         }
     }
 
+    private func authenticationFailed() {
+        updateStatus(.failed("Minecraft session authentication failed"))
+        transport.disconnect()
+    }
+
+    private func sendPacket(_ packet: Packet) {
+        DiagnosticsLogger.shared.log(id: packet.packetID, size: packet.data.count + 1, direction: "Out", state: "\(currentState)")
+        transport.send(packet: packet)
+    }
+
     private func updateStatus(_ newStatus: SessionStatus) {
         self.status = newStatus
-        DispatchQueue.main.async {
-            self.onStatusChanged?(newStatus)
+        let callback = onStatusChanged
+        DispatchQueue.main.async { callback?(newStatus) }
+
+        if newStatus == .online {
+            startAntiAfkLoop()
+        } else {
+            antiAfkTask?.cancel()
+            antiAfkTask = nil
         }
+    }
+
+    private func startAntiAfkLoop() {
+        antiAfkTask?.cancel()
+        antiAfkTask = Task { [weak self] in
+            while !Task.isCancelled {
+                // Configurable timer (e.g. 45 seconds)
+                try? await Task.sleep(nanoseconds: 45 * 1_000_000_000)
+                guard !Task.isCancelled else { break }
+                if let self = self {
+                    let packet = await self.createAntiAfkPacket()
+                    await self.transport.send(packet: packet)
+                } else {
+                    break
+                }
+            }
+        }
+    }
+
+    private func createAntiAfkPacket() -> Packet {
+        // Send Set Player Position update with onGround = true to avoid kicks
+        return PlayerPositionPacket.create(x: currentX, y: currentY, z: currentZ, onGround: true)
     }
 }
