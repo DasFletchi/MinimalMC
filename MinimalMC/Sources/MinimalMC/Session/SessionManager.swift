@@ -16,6 +16,8 @@ public class SessionManager: ObservableObject {
     private var reconnectAttempt = 0
     private var isIntentionalDisconnect = false
 
+    private var generation = UUID()
+    private var reconnectWork: DispatchWorkItem?
     private var session: MinecraftSession?
     private var timer: Timer?
     private var targetEndDate: Date?
@@ -42,20 +44,31 @@ public class SessionManager: ObservableObject {
             self.targetEndDate = Date().addingTimeInterval(duration)
         }
 
-        connect()
         startTimer()
         BGTaskManager.shared.scheduleTask()
         BGTaskManager.shared.startBackgroundSession()
+        connect()
     }
 
     private func connect() {
-        session = MinecraftSession(serverHost: currentHost, serverPort: currentPort, username: currentUsername)
+        let offline = UserDefaults.standard.object(forKey: "offlineMode") as? Bool ?? true
+        let storedProfile = KeychainManager.shared.loadToken(for: "minecraft_profile_id")
+        let profile = storedProfile.flatMap { MinecraftProfile(id: $0, name: currentUsername).uuid }
+        if !offline && (profile == nil || KeychainManager.shared.loadToken(for: "minecraft_access_token") == nil) {
+            status = .failed("Sign in with Microsoft in Settings first")
+            stopTimer()
+            BGTaskManager.shared.stopBackgroundSession()
+            return
+        }
+        session = MinecraftSession(serverHost: currentHost, serverPort: currentPort, username: currentUsername, uuid: offline ? nil : profile)
 
         let newSession = session!
+        let currentGeneration = generation
         Task {
         await newSession.setCallbacks(onStatusChanged: { [weak self] newStatus in
             guard let self = self else { return }
             DispatchQueue.main.async {
+                guard self.generation == currentGeneration else { return }
                 if case .disconnected = newStatus {
                     // Handled by onDisconnect, skip setting status directly to prevent UI flicker during reconnect
                 } else if case .failed = newStatus {
@@ -71,7 +84,8 @@ public class SessionManager: ObservableObject {
 
         , onDisconnect: { [weak self] reason in
             DispatchQueue.main.async {
-                self?.handleDisconnect(reason: reason)
+                guard let self = self, self.generation == currentGeneration else { return }
+                self.handleDisconnect(reason: reason)
             }
         }
 
@@ -101,11 +115,13 @@ public class SessionManager: ObservableObject {
             status = .reconnecting
             let delays = [2.0, 5.0, 10.0]
             let delay = delays[reconnectAttempt - 1]
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            let work = DispatchWorkItem { [weak self] in
                 guard let self = self, !self.isIntentionalDisconnect else { return }
                 self.stopConnection()
                 self.connect()
             }
+            reconnectWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         } else {
             stopTimer()
             BGTaskManager.shared.stopBackgroundSession()
@@ -115,6 +131,9 @@ public class SessionManager: ObservableObject {
     }
 
     private func stopConnection() {
+        generation = UUID()
+        reconnectWork?.cancel()
+        reconnectWork = nil
         let old = session
         session = nil
         Task { await old?.setCallbacks(); await old?.stop() }

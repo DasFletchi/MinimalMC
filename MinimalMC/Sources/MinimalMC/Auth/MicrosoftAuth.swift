@@ -126,12 +126,15 @@ public class MicrosoftAuth {
     public static let shared = MicrosoftAuth()
     public var isOfflineMode: Bool = true
 
-    // For a real implementation, this would involve ASWebAuthenticationSession, OAuth2,
-    // XSTS token exchange, and Minecraft API login.
-    // Given the constraints and to keep it a minimal MVP, we expose the interface
-    // but throw a NotImplemented error or return a mock for testing purposes.
-
     private init() {}
+
+    private func form(_ values: [String: String]) -> Data {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return values.sorted { $0.key < $1.key }.map { key, value in
+            "\(key.addingPercentEncoding(withAllowedCharacters: allowed)!)=\(value.addingPercentEncoding(withAllowedCharacters: allowed)!)"
+        }.joined(separator: "&").data(using: .utf8)!
+    }
 
     // MARK: - Device Code Flow
 
@@ -143,8 +146,7 @@ public class MicrosoftAuth {
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
-        let bodyString = "client_id=\(clientId)&scope=XboxLive.signin%20offline_access"
-        request.httpBody = bodyString.data(using: .utf8)
+        request.httpBody = form(["client_id": clientId, "scope": "XboxLive.signin offline_access"])
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -156,19 +158,22 @@ public class MicrosoftAuth {
         return info
     }
 
-    public func pollForToken(clientId: String, deviceCode: String, interval: Int) async throws -> TokenResponse {
+    public func pollForToken(clientId: String, deviceCode: String, interval: Int, expiresIn: Int = 900) async throws -> TokenResponse {
         let urlString = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
         guard let url = URL(string: urlString) else { throw DeviceAuthError.invalidResponse }
 
-        let bodyString = "grant_type=urn:ietf:params:oauth:grant-type:device_code&client_id=\(clientId)&device_code=\(deviceCode)"
+        let body = form(["grant_type": "urn:ietf:params:oauth:grant-type:device_code", "client_id": clientId, "device_code": deviceCode])
+        var pollingInterval = max(1, interval)
+        let deadline = Date().addingTimeInterval(TimeInterval(max(1, expiresIn)))
 
-        while true {
-            try await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
+        while Date() < deadline {
+            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: UInt64(pollingInterval) * 1_000_000_000)
 
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-            request.httpBody = bodyString.data(using: .utf8)
+            request.httpBody = body
 
             let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -183,6 +188,9 @@ public class MicrosoftAuth {
             } else {
                 if let errorResponse = try? JSONDecoder().decode(TokenErrorResponse.self, from: data) {
                     switch errorResponse.error {
+                    case "slow_down":
+                        pollingInterval += 5
+                        continue
                     case "authorization_pending":
                         continue
                     case "authorization_declined":
@@ -199,6 +207,7 @@ public class MicrosoftAuth {
                 }
             }
         }
+        throw DeviceAuthError.expiredToken
     }
 
     public func refreshToken(clientId: String) async throws -> TokenResponse {
@@ -213,8 +222,7 @@ public class MicrosoftAuth {
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
-        let bodyString = "grant_type=refresh_token&client_id=\(clientId)&refresh_token=\(refreshToken)"
-        request.httpBody = bodyString.data(using: .utf8)
+        request.httpBody = form(["grant_type": "refresh_token", "client_id": clientId, "refresh_token": refreshToken])
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -352,6 +360,8 @@ public class MicrosoftAuth {
 
         let profile = try JSONDecoder().decode(MinecraftProfile.self, from: profileData)
 
+        _ = KeychainManager.shared.saveToken(mcToken, for: "minecraft_access_token")
+        _ = KeychainManager.shared.saveToken(profile.id, for: "minecraft_profile_id")
         return (mcToken, profile)
     }
 
@@ -362,49 +372,9 @@ public class MicrosoftAuth {
         case networkError(Error)
     }
 
-    public func authenticate(completion: @escaping (Result<MinecraftProfile, AuthError>) -> Void) {
-        if isOfflineMode {
-            // Offline mode: generate a random profile and return immediately
-            let mockProfile = MinecraftProfile(id: UUID().uuidString.replacingOccurrences(of: "-", with: ""), name: "Player")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                completion(.success(mockProfile))
-            }
-        } else {
-            // Real authentication requires an initial MS Access Token.
-            // As obtaining it via web view is outside the scope of this step,
-            // we return notImplemented if offline mode is disabled for now.
-            DispatchQueue.main.async {
-                completion(.failure(.notImplemented))
-            }
+    public func signOut() {
+        for key in ["microsoft_access_token", "microsoft_refresh_token", "microsoft_token_expires_at", "minecraft_access_token", "minecraft_profile_id"] {
+            KeychainManager.shared.deleteToken(for: key)
         }
-    }
-
-    // Simulate joining the Mojang session server
-    public func joinServer(accessToken: String, selectedProfile: String, serverHash: String, completion: @escaping (Bool) -> Void) {
-        guard let url = URL(string: "https://sessionserver.mojang.com/session/minecraft/join") else {
-            completion(false)
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: String] = [
-            "accessToken": accessToken,
-            "selectedProfile": selectedProfile,
-            "serverId": serverHash
-        ]
-
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            guard error == nil, let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 204 else {
-                completion(false)
-                return
-            }
-            completion(true)
-        }
-        task.resume()
     }
 }
