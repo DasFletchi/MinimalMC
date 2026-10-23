@@ -27,11 +27,11 @@ tests.add_dependency(app)
 [['MinimalMC/Sources', app], ['MinimalMC/Tests', tests]].each do |directory, target|
   group = project.main_group.new_group(target.name)
   Dir.glob("#{directory}/**/*.swift").sort.each do |path|
-    reference = group.new_file(path, :source_root)
+    reference = group.new_file(path, :project)
     target.add_file_references([reference])
   end
 end
-project.main_group.new_file('MinimalMC/Resources/Info.plist', :source_root)
+project.main_group.new_file('MinimalMC/Resources/Info.plist', :project)
 scheme = Xcodeproj::XCScheme.new
 scheme.add_build_target(app)
 scheme.set_launch_target(app)
