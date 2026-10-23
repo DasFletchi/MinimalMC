@@ -123,6 +123,8 @@ struct MinecraftLoginResponse: Codable {
 }
 
 public class MicrosoftAuth {
+    // Public OAuth application identifier; not a client secret.
+    public static let clientID = "83734d15-5ed1-4486-aa17-e84511d2250f"
     public static let shared = MicrosoftAuth()
     public var isOfflineMode: Bool = true
 

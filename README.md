@@ -23,7 +23,7 @@ This client is designed for background persistence using standard iOS APIs. It d
 - ❌ 3D World Rendering (No chunks or blocks)
 - ❌ Entities & Inventory Management
 - ❌ Chat & Command interface (MVP scope)
-- Microsoft sign-in requires your own Microsoft application client ID and a Minecraft Java license. Device-code → Xbox Live → XSTS → Minecraft exchange is implemented, but live account authentication needs device testing.
+- Microsoft sign-in uses MinimalMC's built-in public application ID. Users only need a Microsoft account with a Minecraft Java license. Device-code → Xbox Live → XSTS → Minecraft exchange is implemented; full account authentication still needs device testing.
 
 ## System Requirements
 - **OS:** iOS 15.0+
@@ -40,7 +40,7 @@ Since this project uses a Ruby script to generate the `.xcodeproj` file:
 ## Start Instructions
 1. Launch the app.
 2. Go to settings (gear icon) and configure your test server IP and Port.
-3. Use offline mode for an offline-mode test server; for online-mode servers enter your Microsoft public-client application ID and complete Microsoft sign-in.
+3. Use offline mode for an offline-mode test server. For online-mode servers, tap **Sign in with Microsoft**, open the Microsoft sign-in page, enter the displayed code, and return to Settings until the app confirms your player name. No application ID or Azure registration is needed for end users.
 4. Tap on a session duration on the main screen to begin.
 
 ## Architecture
