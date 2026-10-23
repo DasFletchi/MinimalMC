@@ -1,0 +1,32 @@
+name: Test Codex login diagnostics on an isolated branch
+on:
+  push:
+    branches: [codex/login-diagnostics]
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run authentication and protocol tests
+        run: swift test
+      - name: Create a new tested branch with Codex authorship
+        env:
+          GIT_AUTHOR_NAME: Codex
+          GIT_AUTHOR_EMAIL: codex@openai.com
+          GIT_COMMITTER_NAME: Codex
+          GIT_COMMITTER_EMAIL: codex@openai.com
+        run: |
+          set -euo pipefail
+          BRANCH="codex/login-diagnostics-tested"
+          if git ls-remote --exit-code --heads origin "$BRANCH"; then
+            echo "Target branch already exists; refusing to modify it."
+            exit 1
+          fi
+          NEW=$(printf '%s\n' 'Explain failing Microsoft/Xbox/Minecraft sign-in steps without exposing tokens' | git -c commit.gpgsign=false commit-tree "3d41471a765a8fddd3c10c6bc4d2568840c5d7c7" -p "241ed3b6f4b4de11855c5abdd48a6e6770a65156")
+          git push origin "$NEW:refs/heads/$BRANCH"
+          git show -s --format='%H %an <%ae>' "$NEW"
