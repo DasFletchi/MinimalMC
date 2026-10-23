@@ -374,7 +374,7 @@ public class MicrosoftAuth {
 
     public func signOut() {
         for key in ["microsoft_access_token", "microsoft_refresh_token", "microsoft_token_expires_at", "minecraft_access_token", "minecraft_profile_id"] {
-            KeychainManager.shared.deleteToken(for: key)
+            _ = KeychainManager.shared.deleteToken(for: key)
         }
     }
 }

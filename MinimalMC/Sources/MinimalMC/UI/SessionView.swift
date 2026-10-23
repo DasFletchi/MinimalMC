@@ -19,7 +19,7 @@ struct SessionActiveView: View {
                     Text(sessionManager.formattedTimeRemaining)
                         .font(.system(size: 40, weight: .bold, design: .monospaced))
 
-                    Text("Time Remaining")
+                    Text(sessionManager.totalDuration == 0 ? "No time limit" : "Time Remaining")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -76,7 +76,7 @@ struct StatusView: View {
     private func colorForStatus(_ status: SessionStatus) -> Color {
         switch status {
         case .idle, .stopped: return .gray
-        case .connecting, .authenticating, .loggingIn, .configuring: return .orange
+        case .starting, .connecting, .authenticating, .loggingIn, .configuring: return .orange
         case .online, .backgroundTaskRunning: return .green
         case .reconnecting: return .yellow
         case .expired, .disconnected, .failed: return .red

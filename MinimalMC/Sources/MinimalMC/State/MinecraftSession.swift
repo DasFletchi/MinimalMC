@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 import Security
 
-public enum SessionStatus: Equatable {
+public enum SessionStatus: Equatable, Sendable {
     case idle
     case starting
     case connecting
@@ -192,7 +192,7 @@ public actor MinecraftSession {
                         var responseData = Data()
                         try? DataTypes.writeString("minecraft:brand", to: &responseData)
                         try? DataTypes.writeString("MinimalMC", to: &responseData)
-                        let responsePacket = Packet(packetID: 0x00, data: responseData)
+                        let responsePacket = Packet(packetID: 0x01, data: responseData)
                         transport.send(packet: responsePacket)
                     }
                 case 0x01: // Disconnect
@@ -216,7 +216,7 @@ public actor MinecraftSession {
                     self.sendPacket(pongResponse)
                 case 0x05: // Registry Data
                     break
-                case 0x07: // Update Tags
+                case 0x09: // Update Tags
                     break
                 default:
                     break
