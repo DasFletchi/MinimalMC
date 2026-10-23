@@ -23,14 +23,10 @@ public struct LoginStartPacket {
     public static func create(username: String, uuid: UUID?) throws -> Packet {
         var data = Data()
         try DataTypes.writeString(username, to: &data)
-        // UUID handling depends on specific version (e.g., 1.20.4 protocol 765)
-        if let uuid = uuid {
-            data.append(contentsOf: [1]) // Has UUID
-            let uuidBytes = withUnsafeBytes(of: uuid.uuid) { Data($0) }
-            data.append(uuidBytes)
-        } else {
-            data.append(contentsOf: [0]) // No UUID
-        }
+        // 1.20.4 protocol 765 requires UUID directly without a boolean flag
+        let resolvedUUID = uuid ?? UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        let uuidBytes = withUnsafeBytes(of: resolvedUUID.uuid) { Data($0) }
+        data.append(uuidBytes)
         return Packet(packetID: 0x00, data: data) // 1.20.4 Login Start ID
     }
 }
@@ -73,5 +69,23 @@ public struct PlayerPositionPacket {
         data.append(withUnsafeBytes(of: &bz) { Data($0) })
         data.append(contentsOf: [onGround ? 1 : 0])
         return Packet(packetID: 0x17, data: data) // 1.20.4 Set Player Position
+    }
+}
+
+public struct PlayerPositionAndRotationPacket {
+    public static func create(x: Double, y: Double, z: Double, yaw: Float, pitch: Float, onGround: Bool) -> Packet {
+        var data = Data()
+        var bx = x.bitPattern.bigEndian
+        data.append(withUnsafeBytes(of: &bx) { Data($0) })
+        var by = y.bitPattern.bigEndian
+        data.append(withUnsafeBytes(of: &by) { Data($0) })
+        var bz = z.bitPattern.bigEndian
+        data.append(withUnsafeBytes(of: &bz) { Data($0) })
+        var byaw = yaw.bitPattern.bigEndian
+        data.append(withUnsafeBytes(of: &byaw) { Data($0) })
+        var bpitch = pitch.bitPattern.bigEndian
+        data.append(withUnsafeBytes(of: &bpitch) { Data($0) })
+        data.append(contentsOf: [onGround ? 1 : 0])
+        return Packet(packetID: 0x18, data: data) // 1.20.4 Set Player Position and Rotation
     }
 }
